@@ -1,0 +1,2 @@
+biopython==1.83
+pandas==2.2.1
