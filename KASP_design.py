@@ -88,19 +88,18 @@ if __name__ == '__main__':
     # marker_info = pd.read_csv('C:\genome\marker.csv')
     # output_csv_path = 'C:\\genome\\primer_designs.csv'
     # data = [] # Initialize a list to store data
-    if __name__ == '__main__':
-        parser = argparse.ArgumentParser(description="Generate primers for KASP marker design.")
-        parser.add_argument("-g", "--genome_path", required=True, help="Path to the genome FASTA file.")
-        parser.add_argument("-m", "--marker_csv", required=True,
-                            help="Path to the CSV file containing marker information.")
-        parser.add_argument("-o", "--output_csv", required=True,
-                            help="Path to save the output CSV file with primer designs.")
+    parser = argparse.ArgumentParser(description="Generate primers for KASP marker design.")
+    parser.add_argument("-g", "--genome_path", required=True, help="Path to the genome FASTA file.")
+    parser.add_argument("-m", "--marker_csv", required=True,
+                        help="Path to the CSV file containing marker information.")
+    parser.add_argument("-o", "--output_csv", required=True,
+                        help="Path to save the output CSV file with primer designs.")
 
-        args = parser.parse_args()
+    args = parser.parse_args()
 
-        md = MarkerDesign()
-        marker_info = pd.read_csv(args.marker_csv)
-        data = []
+    md = MarkerDesign()
+    marker_info = pd.read_csv(args.marker_csv)
+    data = []
     for index, row in marker_info.iterrows():
         Chr = row[0]  # Selecting column 1
         position = row[1]  # Selecting column 2
