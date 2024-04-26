@@ -45,3 +45,5 @@ The output CSV file will contain the following columns:
 - `Reverse_Primer`: Reverse primer.
 - `Tm`: Melting temperature of the reverse primer.
 - `Product size`: Expected size of the amplified product.
+- `hairpin`: Check for potential hairpin structure.
+- `Primer dimer`: Check for the possible formation of primer dimer.
