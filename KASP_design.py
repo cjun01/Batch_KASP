@@ -110,8 +110,8 @@ if __name__ == '__main__':
     md = MarkerDesign()
     marker_info = pd.read_csv(args.marker_csv)
     data = []
-    #for index, row in tqdm(marker_info.iterrows(), total=marker_info.shape[0], desc="Processing markers"):
-    for index, row in marker_info.iterrows():
+    for index, row in tqdm(marker_info.iterrows(), total=marker_info.shape[0], desc="Processing markers"):
+    #for index, row in marker_info.iterrows():
         Chr = row.iloc[0]  # Selecting column 1
         position = row.iloc[1]  # Selecting column 2
         alt = row.iloc[2]  # Selecting column 3
