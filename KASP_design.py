@@ -34,7 +34,7 @@ class MarkerDesign():
                 primer = sequence[start:end]
                 reverse_tm = self.find_TM(primer)  # Corrected to pass 'primer' instead of 'seq'
                 if target_tm - tm_tolerance <= reverse_tm <= target_tm + tm_tolerance:
-                    potential_primers.append((primer, reverse_tm,start+50))
+                    potential_primers.append((primer, reverse_tm,start))
         return potential_primers[:5]  # Ensure to return only up to 5 primers, just in case
 
     def primer_dimer_check(self, primer1, primer2, threshold=5):
@@ -53,12 +53,11 @@ class MarkerDesign():
                 if stem1 == complement_stem2:
                     return True
         return False  # No hairpin structure found
-    def KASP(self, genome_path, chr, position, alter,check_hairpin='no', check_primer_dimer="no"):
+    def KASP(self, genome_path, chr, position, alter):
         # One-based position you're interested in
         target_position_one_based = position
         # Convert to zero-based for Python indexing
         target_position_zero_based = target_position_one_based - 1
-        filtered_primers = []
         for record in SeqIO.parse(genome_path, 'fasta'):
             if record.id == chr:
                 # Iterate through possible left sequence lengths (18 to 30)
@@ -78,34 +77,22 @@ class MarkerDesign():
                         reversed_complementary_sequence = self.reverse_complement(right_sequence)
                         potential_reverse_primers = self.find_reverse_primers(reversed_complementary_sequence,
                                                                               Tm_forward)
-
-                        if check_hairpin=='yes' and check_primer_dimer=='No':
-                            for primer, tm, pos in potential_reverse_primers:
-                                if not self.find_hairpins(primer):  # Keep primer if it doesn't have a hairpin
-                                    filtered_primers.append((primer, tm, len(A1)+len(A2)+pos+len(filtered_primers[:1])))
-                                    return A1, A2, filtered_primers[:1], "No", 'Not checked'
-                                elif self.find_hairpins(primer):
-                                    return A1, A2, filtered_primers[:1], "Yes",'Not checked'
-
-                        if check_hairpin == 'yes' and check_primer_dimer == 'yes':
-                            for primer, tm, pos in potential_reverse_primers:
-                                has_hairpin = self.find_hairpins(primer)
-                                has_dimer = self.primer_dimer_check(A1, primer) or self.primer_dimer_check(A2, primer)
-                                if not has_hairpin and not has_dimer:
-                                    filtered_primers.append((primer, tm, len(A1) + len(A2) + pos))
-                                    return A1, A2, filtered_primers[:1], "No", 'No'
-                                elif has_hairpin and not has_dimer:
-                                    return A1, A2, filtered_primers[:1], "Yes", 'No'
-                                elif not has_hairpin and has_dimer:
-                                    return A1, A2, filtered_primers[:1], "No", 'Yes'
-                                else:
-                                    return A1, A2, filtered_primers[:1], "Yes", 'Yes'
-
-                        elif check_hairpin == 'no' and check_primer_dimer == 'no':
-                            # If neither hairpin nor dimer checks are requested, return the first primer found.
-                            return A1, A2, potential_reverse_primers[:1], "Not checked", "Not checked"
-                break  # Exit the loop after finding the chromosome, regardless of Tm result
-            # Press the green button in the gutter to run the script.
+                        results = []
+                        filtered_primers = []
+                        for primer, tm, pos in potential_reverse_primers:
+                            filtered_primers.append((primer, tm, len(A1) + len(A2) + pos))
+                            has_hairpin = self.find_hairpins(primer)
+                            has_dimer = self.primer_dimer_check(A1, primer) or self.primer_dimer_check(A2, primer)
+                            if not has_hairpin and not has_dimer:
+                                results.append((A1, A2, filtered_primers[-1:], "No", 'No'))
+                            elif has_hairpin and not has_dimer:
+                                results.append((A1, A2, filtered_primers[:1], "Yes", 'No'))
+                            elif not has_hairpin and has_dimer:
+                                results.append((A1, A2, filtered_primers[:1], "No", 'Yes'))
+                            else:
+                                results.append((A1, A2, filtered_primers[:1], "Yes", 'Yes'))
+                            return results
+                        break
 if __name__ == '__main__':
     # genome_path='C:\\genome\\2RBY\\Lcu.2RBY.FASTA'
     # md = MarkerDesign()  # Create an instance of the MarkerDesign class
@@ -118,35 +105,30 @@ if __name__ == '__main__':
                         help="Path to the CSV file containing marker information.")
     parser.add_argument("-o", "--output_csv", required=True,
                         help="Path to save the output CSV file with primer designs.")
-    parser.add_argument("--hairpin", required=False, default='no', choices=['yes', 'no'],
-                        help="Check for hairpin structures in primers. Default is 'no'.")
-    parser.add_argument("--primer_dimer", required=False, default='no', choices=['yes', 'no'],
-                        help="Check for hairpin structures in primers. Default is 'no'.")
     args = parser.parse_args()
 
     md = MarkerDesign()
     marker_info = pd.read_csv(args.marker_csv)
     data = []
-    for index, row in tqdm(marker_info.iterrows(), total=marker_info.shape[0], desc="Processing markers"):
+    #for index, row in tqdm(marker_info.iterrows(), total=marker_info.shape[0], desc="Processing markers"):
+    for index, row in marker_info.iterrows():
         Chr = row.iloc[0]  # Selecting column 1
         position = row.iloc[1]  # Selecting column 2
         alt = row.iloc[2]  # Selecting column 3
-        A1_primer, A2_primer, reverse_primer, hairpin_check, dimer_check = md.KASP(args.genome_path, Chr, position, alt, args.hairpin,args.primer_dimer)  # Assuming default 'no' for check_hairpin
-
-
-        for primer, tm, size in reverse_primer:
-            data.append({
-                'Chr': Chr,
-                'Position': position,
-                'Alt': alt,
-                'A1_Primer': A1_primer,
-                'A2_Primer': A2_primer,
-                'Reverse_Primer': primer,
-                'Tm': tm,
-                'Product size': size,
-                'hairpin':hairpin_check,
-                'Primer dimer':dimer_check
-            })
+        A1_primer, A2_primer, reverse_primer, hairpin_check, dimer_check = md.KASP(args.genome_path, Chr, position, alt)[0]
+        primer, tm, size = reverse_primer[0]
+        data.append({
+            'Chr': Chr,
+            'Position': position,
+            'Alt': alt,
+            'A1_Primer': A1_primer,
+            'A2_Primer': A2_primer,
+            'Reverse_Primer': primer,
+            'Tm': tm,
+            'Product size': size,
+            'hairpin':hairpin_check,
+            'Primer dimer':dimer_check
+        })
     # Convert the collected data to a pandas DataFrame
     df = pd.DataFrame(data)
 
