@@ -2,7 +2,7 @@
 # KASP Marker Design Tool
 
 ## Overview
-The KASP Marker Design Tool is a Python-based utility designed to assist in the design of KASP (Kompetitive Allele Specific PCR) markers. It automates the process of designing forward (FAM and VIC labeled) and reverse primers for a given set of genetic markers, taking into consideration factors like melting temperature (Tm) and potential hairpin structures.
+The KASP Marker Design Tool is a Python-based utility designed to assist in the design of KASP (Kompetitive Allele Specific PCR) markers. It automates the process of designing forward (FAM and VIC labeled) and reverse primers for a given set of genetic markers, taking into consideration factors like melting temperature (Tm), potential hairpin structures, and possible primer dimer.
 
 ## Features
 - Automated primer design for KASP markers.
