@@ -6,7 +6,7 @@ The KASP Marker Design Tool is a Python-based utility designed to assist in the 
 
 ## Features
 - Automated primer design for KASP markers.
-- Customizable Tm calculation and hairpin structure checking.
+- Customizable Tm calculation and hairpin structure and primer dimer checking.
 - Command-line interface for easy use and integration into bioinformatics pipelines.
 
 ## Requirements
@@ -30,8 +30,8 @@ The tool can be executed from the command line by providing paths to the input g
 ## Input File Format
 The marker information CSV file should contain three columns:
 - `Chr`: Chromosome name or number.
-- `Position`: Position of the marker.
-- `Alt`: Alternate allele to design the VIC labeled primer.
+- `Position`: Position of the SNP.
+- `Alt`: Alternate allele at SNP position.
 
 Example of marker CSV: SNP_position.csv
 
