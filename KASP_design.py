@@ -26,16 +26,19 @@ class MarkerDesign():
 
     def find_reverse_primers(self, sequence, target_tm, tm_tolerance=2, min_length=20, max_length=30):
         potential_primers = []
+        found = False  # Flag to indicate when two primers have been found
         for start in range(len(sequence)-30):
-            if len(potential_primers) >= 5:  # Stop if we already have 5 primers
-                break
             for end in range(start + min_length, start + max_length+1):
-
                 primer = sequence[start:end]
                 reverse_tm = self.find_TM(primer)  # Corrected to pass 'primer' instead of 'seq'
                 if target_tm - tm_tolerance <= reverse_tm <= target_tm + tm_tolerance:
-                    potential_primers.append((primer, reverse_tm,start))
-        return potential_primers[:5]  # Ensure to return only up to 5 primers, just in case
+                    potential_primers.append((primer, reverse_tm,200-end+1))
+                    if len(potential_primers) >= 2:  # Stop if we already have 2 primers
+                        found = True  # Set the flag to true as we've found enough primers
+                        break  # Break out of the inner loop
+            if found:  # Check the flag after breaking out of the inner loop
+                break  # Break out of the outer loop if the flag is set
+        return potential_primers[:1]  # Ensure to return only up to 1 primers, just in case
 
     def primer_dimer_check(self, primer1, primer2, threshold=5):
         # Check last 'threshold' bases for potential dimer formation
@@ -69,18 +72,19 @@ class MarkerDesign():
                         # Construct primers with the selected left sequence
                         A1 = FAM + left_sequence
                         A2 = VIC + left_sequence[:-1] + alter
-                        #print(f"A1 primer: {A1}")
-                        #print(f"A2 primer: {A2}")
+                        print(f"A1 primer: {A1}")
+                        print(f"A2 primer: {A2}")
 
                         # Proceed with the rest of your method
                         right_sequence = record.seq[target_position_one_based + 1:target_position_one_based + 200]
+                        print(right_sequence)
                         reversed_complementary_sequence = self.reverse_complement(right_sequence)
                         potential_reverse_primers = self.find_reverse_primers(reversed_complementary_sequence,
                                                                               Tm_forward)
                         results = []
                         filtered_primers = []
                         for primer, tm, pos in potential_reverse_primers:
-                            filtered_primers.append((primer, tm, len(A1) + len(A2) + pos))
+                            filtered_primers.append((primer, tm, len(A1) + len(primer) + pos))
                             has_hairpin = self.find_hairpins(primer)
                             has_dimer = self.primer_dimer_check(A1, primer) or self.primer_dimer_check(A2, primer)
                             if not has_hairpin and not has_dimer:
@@ -110,25 +114,30 @@ if __name__ == '__main__':
     md = MarkerDesign()
     marker_info = pd.read_csv(args.marker_csv)
     data = []
-    for index, row in tqdm(marker_info.iterrows(), total=marker_info.shape[0], desc="Processing markers"):
-    #for index, row in marker_info.iterrows():
+    #for index, row in tqdm(marker_info.iterrows(), total=marker_info.shape[0], desc="Processing markers"):
+    for index, row in marker_info.iterrows():
         Chr = row.iloc[0]  # Selecting column 1
         position = row.iloc[1]  # Selecting column 2
         alt = row.iloc[2]  # Selecting column 3
-        A1_primer, A2_primer, reverse_primer, hairpin_check, dimer_check = md.KASP(args.genome_path, Chr, position, alt)[0]
-        primer, tm, size = reverse_primer[0]
-        data.append({
-            'Chr': Chr,
-            'Position': position,
-            'Alt': alt,
-            'A1_Primer': A1_primer,
-            'A2_Primer': A2_primer,
-            'Reverse_Primer': primer,
-            'Tm': tm,
-            'Product size': size,
-            'hairpin':hairpin_check,
-            'Primer dimer':dimer_check
-        })
+        result=md.KASP(args.genome_path, Chr, position, alt)
+        #print(result)
+        if result is not None and result[0] is not None:
+            A1_primer, A2_primer, reverse_primer, hairpin_check, dimer_check = result[0]
+            primer, tm, size = reverse_primer[0]
+            data.append({
+                'Chr': Chr,
+                'Position': position,
+                'Alt': alt,
+                'A1_Primer': A1_primer,
+                'A2_Primer': A2_primer,
+                'Reverse_Primer': primer,
+                'Tm': tm,
+                'Product size': size,
+                'hairpin':hairpin_check,
+                'Primer dimer':dimer_check
+            })
+        else:
+            continue
     # Convert the collected data to a pandas DataFrame
     df = pd.DataFrame(data)
 
