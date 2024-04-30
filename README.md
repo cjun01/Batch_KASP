@@ -38,12 +38,12 @@ Example of marker CSV: SNP_position.csv
 ## Output File Format (primer_designs.csv)
 The output CSV file will contain the following columns:
 - `Chr`: Chromosome.
-- `Position`: Position of the marker.
+- `Position`: Position of the SNP.
 - `Alt`: Alternate allele.
 - `A1_Primer`: Forward primer labeled with FAM.
 - `A2_Primer`: Forward primer labeled with VIC, specific to the alternate allele.
-- `Reverse_Primer`: Reverse primer.
-- `Tm`: Melting temperature of the reverse primer.
+- `Reverse_Primer`: Common reverse primer.
+- `Tm`: Melting temperature primers in PCR.
 - `Product size`: Expected size of the amplified product.
 - `hairpin`: Check for potential hairpin structure.
 - `Primer dimer`: Check for the possible formation of primer dimer.
