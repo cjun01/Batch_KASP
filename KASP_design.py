@@ -13,7 +13,6 @@ class MarkerDesign():
         :param df: pandas DataFrame containing the SNP data with columns 'Chr', 'position'
         :return: DataFrame with filtered SNPs.
         """
-        import pandas as pd
         # Sort the DataFrame by chromosome and position
         df = df.sort_values(['Chr', 'position'])
 
@@ -33,7 +32,6 @@ class MarkerDesign():
         for index, row in df.iterrows():
             # Apply the condition to decide whether to keep the SNP
             if (row['prev_distance'] > 50) and (row['next_distance'] > 300):
-                print(row,row['prev_distance'], row['next_distance'])
                 # If the condition is met, add the row to the list
                 filtered_snps.append(row)
 
@@ -101,13 +99,14 @@ class MarkerDesign():
         # Calculate GC content as a percentage of the total length
         gc_content = (gc_count / len(sequence)) * 100
         return gc_content
-    def find_repeats(self,sequence):
+
+    def find_repeats(self, sequence):
         """
         Find repeated motifs in the sequence based on predefined thresholds.
-        Returns 'Yes' if any significant repeats are found, otherwise 'No'.
+        Returns 'Yes' along with details of the exact number of repetitions if any significant repeats are found, otherwise 'No'.
         """
         # Predefined thresholds for each repeat length
-        thresholds = {1: 6, 2: 5, 3: 4}  # Minimum repetitions: 5 for single, 3 for double and triple nucleotides
+        thresholds = {1: 6, 2: 4, 3: 4}  # Minimum repetitions: 6 for single, 5 for double, and 4 for triple nucleotides
 
         sequence_length = len(sequence)
 
@@ -115,12 +114,22 @@ class MarkerDesign():
         for n, min_repeats in thresholds.items():
             for i in range(sequence_length - n + 1):
                 repeat = sequence[i:i + n]
+                max_repeats = 0  # Variable to track the maximum exact number of repeats
+
                 # Check if the next segment is the same as the current segment
-                for j in range(min_repeats, (sequence_length - i) // n + 1):
+                for j in range(1, (sequence_length - i) // n + 1):
                     if sequence[i:i + n * j] == repeat * j:
-                        return ("Yes", f"at least {j} repetitions of a {n}-nucleotide repeat: '{repeat}'")  # Significant repeat found, return "Yes"
+                        max_repeats = j  # Update the max_repeats if the current repeat count is valid
+                    else:
+                        break  # Break out of the loop once the sequence no longer matches the repeat pattern
+
+                # After determining the maximum number of repeats, check if it meets or exceeds the threshold
+                if max_repeats >= min_repeats:
+                    return ("Yes",
+                            f"{max_repeats} repetitions of a {n}-nucleotide repeat: '{repeat}'")  # Significant repeat found, return "Yes"
 
         return "No"  # No significant repeats found, return "No"
+
     def KASP(self, sequences, chr, position, alter):
         # One-based position you're interested in
         target_position_one_based = position
@@ -190,8 +199,8 @@ if __name__ == '__main__':
     marker_info = pd.read_csv(args.marker_csv)
     marker_filtered=md.filter_snps(marker_info)
     data = []
-    #for index, row in tqdm(marker_filtered.iterrows(), total=marker_filtered.shape[0], desc="Processing markers"):
-    for index, row in marker_filtered.iterrows():
+    for index, row in tqdm(marker_filtered.iterrows(), total=marker_filtered.shape[0], desc="Processing markers"):
+    #for index, row in marker_filtered.iterrows():
         Chr = row.iloc[0]  # Selecting column 1
         position = row.iloc[1]  # Selecting column 2
         alt = row.iloc[2]  # Selecting column 3
