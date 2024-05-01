@@ -50,53 +50,51 @@ class MarkerDesign():
         for i in range(len(seq)):
             for j in range(i + min_stem * 2 + min_loop, len(seq) + 1):
                 stem1 = seq[i:i + min_stem]
-                loop = seq[i + min_stem:i + min_stem + min_loop]
+                #loop = seq[i + min_stem:i + min_stem + min_loop]
                 stem2 = seq[j - min_stem:j]
                 complement_stem2=self.get_complement(stem2)
                 if stem1 == complement_stem2:
                     return True
         return False  # No hairpin structure found
-    def KASP(self, genome_path, chr, position, alter):
+    def KASP(self, sequences, chr, position, alter):
         # One-based position you're interested in
         target_position_one_based = position
         # Convert to zero-based for Python indexing
         target_position_zero_based = target_position_one_based - 1
-        for record in SeqIO.parse(genome_path, 'fasta'):
-            if record.id == chr:
-                # Iterate through possible left sequence lengths (18 to 30)
-                for length in range(18, 35):  # Includes 18 to 30
-                    left_sequence = record.seq[target_position_zero_based - length:target_position_one_based]
-                    Tm_forward = self.find_TM(left_sequence)
-                    # Check if Tm is within the desired range
-                    if 58 <= Tm_forward <= 63:
-                        # Construct primers with the selected left sequence
-                        A1 = FAM + left_sequence
-                        A2 = VIC + left_sequence[:-1] + alter
-                        print(f"A1 primer: {A1}")
-                        print(f"A2 primer: {A2}")
+        sequence = sequences.get(chr, None)
+        for length in range(18, 35):  # Includes 18 to 30
+            left_sequence = sequence[target_position_zero_based - length:target_position_one_based]
+            Tm_forward = self.find_TM(left_sequence)
+            # Check if Tm is within the desired range
+            if 58 <= Tm_forward <= 63:
+                # Construct primers with the selected left sequence
+                A1 = FAM + left_sequence
+                A2 = VIC + left_sequence[:-1] + alter
+                #print(f"A1 primer: {A1}")
+                #print(f"A2 primer: {A2}")
 
-                        # Proceed with the rest of your method
-                        right_sequence = record.seq[target_position_one_based + 1:target_position_one_based + 200]
-                        print(right_sequence)
-                        reversed_complementary_sequence = self.reverse_complement(right_sequence)
-                        potential_reverse_primers = self.find_reverse_primers(reversed_complementary_sequence,
-                                                                              Tm_forward)
-                        results = []
-                        filtered_primers = []
-                        for primer, tm, pos in potential_reverse_primers:
-                            filtered_primers.append((primer, tm, len(A1) + len(primer) + pos))
-                            has_hairpin = self.find_hairpins(primer)
-                            has_dimer = self.primer_dimer_check(A1, primer) or self.primer_dimer_check(A2, primer)
-                            if not has_hairpin and not has_dimer:
-                                results.append((A1, A2, filtered_primers[-1:], "No", 'No'))
-                            elif has_hairpin and not has_dimer:
-                                results.append((A1, A2, filtered_primers[:1], "Yes", 'No'))
-                            elif not has_hairpin and has_dimer:
-                                results.append((A1, A2, filtered_primers[:1], "No", 'Yes'))
-                            else:
-                                results.append((A1, A2, filtered_primers[:1], "Yes", 'Yes'))
-                            return results
-                        break
+                # Proceed with the rest of your method
+                right_sequence = sequence[target_position_one_based + 1:target_position_one_based + 200]
+                #print(right_sequence)
+                reversed_complementary_sequence = self.reverse_complement(right_sequence)
+                potential_reverse_primers = self.find_reverse_primers(reversed_complementary_sequence,
+                                                                      Tm_forward)
+                results = []
+                filtered_primers = []
+                for primer, tm, pos in potential_reverse_primers:
+                    filtered_primers.append((primer, tm, len(A1) + len(primer) + pos))
+                    has_hairpin = self.find_hairpins(primer)
+                    has_dimer = self.primer_dimer_check(A1, primer) or self.primer_dimer_check(A2, primer)
+                    if not has_hairpin and not has_dimer:
+                        results.append((A1, A2, filtered_primers[-1:], "No", 'No'))
+                    elif has_hairpin and not has_dimer:
+                        results.append((A1, A2, filtered_primers[:1], "Yes", 'No'))
+                    elif not has_hairpin and has_dimer:
+                        results.append((A1, A2, filtered_primers[:1], "No", 'Yes'))
+                    else:
+                        results.append((A1, A2, filtered_primers[:1], "Yes", 'Yes'))
+                    return results
+                break
 if __name__ == '__main__':
     # genome_path='C:\\genome\\2RBY\\Lcu.2RBY.FASTA'
     # md = MarkerDesign()  # Create an instance of the MarkerDesign class
@@ -110,16 +108,21 @@ if __name__ == '__main__':
     parser.add_argument("-o", "--output_csv", required=True,
                         help="Path to save the output CSV file with primer designs.")
     args = parser.parse_args()
+    # Read genome FASTA once and store sequences
+    sequences = {}
+    with open(args.genome_path, "r") as fasta_file:
+        for record in SeqIO.parse(fasta_file, 'fasta'):
+            sequences[record.id] = record.seq
 
     md = MarkerDesign()
     marker_info = pd.read_csv(args.marker_csv)
     data = []
-    #for index, row in tqdm(marker_info.iterrows(), total=marker_info.shape[0], desc="Processing markers"):
-    for index, row in marker_info.iterrows():
+    for index, row in tqdm(marker_info.iterrows(), total=marker_info.shape[0], desc="Processing markers"):
+    #for index, row in marker_info.iterrows():
         Chr = row.iloc[0]  # Selecting column 1
         position = row.iloc[1]  # Selecting column 2
         alt = row.iloc[2]  # Selecting column 3
-        result=md.KASP(args.genome_path, Chr, position, alt)
+        result=md.KASP(sequences, Chr, position, alt)
         #print(result)
         if result is not None and result[0] is not None:
             A1_primer, A2_primer, reverse_primer, hairpin_check, dimer_check = result[0]
