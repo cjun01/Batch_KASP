@@ -5,6 +5,42 @@ from tqdm import tqdm  # Import tqdm for the progress bar
 FAM = 'GAAGGTGACCAAGTTCATGCT'
 VIC = 'GAAGGTCGGAGTCAACGGATT'
 class MarkerDesign():
+    def filter_snps(self, df):
+        """
+        Iteratively check each SNP based on the specified rule and add it to a new DataFrame if it meets the condition:
+        Keep a SNP if it is not less than 50 bp away from the previous SNP and not less than 300 bp away from the next SNP.
+
+        :param df: pandas DataFrame containing the SNP data with columns 'Chr', 'position'
+        :return: DataFrame with filtered SNPs.
+        """
+        import pandas as pd
+        # Sort the DataFrame by chromosome and position
+        df = df.sort_values(['Chr', 'position'])
+
+        # Calculate the distance to the next and previous SNP within each chromosome
+        df['next_distance'] = df.groupby('Chr')['position'].shift(-1) - df['position']
+        df['prev_distance'] = df['position'] - df.groupby('Chr')['position'].shift(1)
+
+        # Set defaults for edge cases where there's no previous or next SNP
+        df['prev_distance'].fillna(1000, inplace=True)  # No previous SNP, set previous distance to 1000
+        df['next_distance'].fillna(1000,
+                                   inplace=True)  # No next SNP, set next distance to 1000
+
+        # Create a new DataFrame to hold the filtered SNPs
+        filtered_snps = []
+
+        # Iterate through each row in the DataFrame
+        for index, row in df.iterrows():
+            # Apply the condition to decide whether to keep the SNP
+            if (row['prev_distance'] > 50) and (row['next_distance'] > 300):
+                print(row,row['prev_distance'], row['next_distance'])
+                # If the condition is met, add the row to the list
+                filtered_snps.append(row)
+
+        # Create a DataFrame from the list of kept rows
+        filtered_df = pd.DataFrame(filtered_snps)
+
+        return filtered_df
 
     def get_complement(self,sequence):
         complements = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C'}
@@ -128,6 +164,9 @@ class MarkerDesign():
                         results.append((A1, A2, filtered_primers[:1], "Yes", 'Yes',GC_forward,GC_reverse,find_repeat_F,find_repeat_R))
                     return results
                 break
+
+
+
 if __name__ == '__main__':
     # genome_path='C:\\genome\\2RBY\\Lcu.2RBY.FASTA'
     # md = MarkerDesign()  # Create an instance of the MarkerDesign class
@@ -149,9 +188,10 @@ if __name__ == '__main__':
 
     md = MarkerDesign()
     marker_info = pd.read_csv(args.marker_csv)
+    marker_filtered=md.filter_snps(marker_info)
     data = []
-    for index, row in tqdm(marker_info.iterrows(), total=marker_info.shape[0], desc="Processing markers"):
-    #for index, row in marker_info.iterrows():
+    #for index, row in tqdm(marker_filtered.iterrows(), total=marker_filtered.shape[0], desc="Processing markers"):
+    for index, row in marker_filtered.iterrows():
         Chr = row.iloc[0]  # Selecting column 1
         position = row.iloc[1]  # Selecting column 2
         alt = row.iloc[2]  # Selecting column 3
