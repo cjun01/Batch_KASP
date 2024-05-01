@@ -33,7 +33,7 @@ class MarkerDesign():
                 reverse_tm = self.find_TM(primer)  # Corrected to pass 'primer' instead of 'seq'
                 if target_tm - tm_tolerance <= reverse_tm <= target_tm + tm_tolerance:
                     potential_primers.append((primer, reverse_tm,200-end+1))
-                    if len(potential_primers) >= 2:  # Stop if we already have 2 primers
+                    if len(potential_primers) >= 5:  # Stop if we already have 2 primers
                         found = True  # Set the flag to true as we've found enough primers
                         break  # Break out of the inner loop
             if found:  # Check the flag after breaking out of the inner loop
@@ -56,6 +56,35 @@ class MarkerDesign():
                 if stem1 == complement_stem2:
                     return True
         return False  # No hairpin structure found
+
+    def calculate_gc_content(self, sequence):
+        # Normalize the sequence to uppercase for consistent counting
+        sequence = sequence.upper()
+        # Count G and C bases
+        gc_count = sequence.count('G') + sequence.count('C')
+        # Calculate GC content as a percentage of the total length
+        gc_content = (gc_count / len(sequence)) * 100
+        return gc_content
+    def find_repeats(self,sequence):
+        """
+        Find repeated motifs in the sequence based on predefined thresholds.
+        Returns 'Yes' if any significant repeats are found, otherwise 'No'.
+        """
+        # Predefined thresholds for each repeat length
+        thresholds = {1: 6, 2: 5, 3: 4}  # Minimum repetitions: 5 for single, 3 for double and triple nucleotides
+
+        sequence_length = len(sequence)
+
+        # Check for each repeat size up to max repeat length
+        for n, min_repeats in thresholds.items():
+            for i in range(sequence_length - n + 1):
+                repeat = sequence[i:i + n]
+                # Check if the next segment is the same as the current segment
+                for j in range(min_repeats, (sequence_length - i) // n + 1):
+                    if sequence[i:i + n * j] == repeat * j:
+                        return ("Yes", f"at least {j} repetitions of a {n}-nucleotide repeat: '{repeat}'")  # Significant repeat found, return "Yes"
+
+        return "No"  # No significant repeats found, return "No"
     def KASP(self, sequences, chr, position, alter):
         # One-based position you're interested in
         target_position_one_based = position
@@ -85,14 +114,18 @@ class MarkerDesign():
                     filtered_primers.append((primer, tm, len(A1) + len(primer) + pos))
                     has_hairpin = self.find_hairpins(primer)
                     has_dimer = self.primer_dimer_check(A1, primer) or self.primer_dimer_check(A2, primer)
+                    GC_forward = self.calculate_gc_content(A1)
+                    GC_reverse = self.calculate_gc_content(primer)
+                    find_repeat_F=self.find_repeats(A1)
+                    find_repeat_R=self.find_repeats(primer)
                     if not has_hairpin and not has_dimer:
-                        results.append((A1, A2, filtered_primers[-1:], "No", 'No'))
+                        results.append((A1, A2, filtered_primers[-1:], "No", 'No',GC_forward,GC_reverse,find_repeat_F,find_repeat_R))
                     elif has_hairpin and not has_dimer:
-                        results.append((A1, A2, filtered_primers[:1], "Yes", 'No'))
+                        results.append((A1, A2, filtered_primers[:1], "Yes", 'No',GC_forward,GC_reverse,find_repeat_F,find_repeat_R))
                     elif not has_hairpin and has_dimer:
-                        results.append((A1, A2, filtered_primers[:1], "No", 'Yes'))
+                        results.append((A1, A2, filtered_primers[:1], "No", 'Yes',GC_forward,GC_reverse,find_repeat_F,find_repeat_R))
                     else:
-                        results.append((A1, A2, filtered_primers[:1], "Yes", 'Yes'))
+                        results.append((A1, A2, filtered_primers[:1], "Yes", 'Yes',GC_forward,GC_reverse,find_repeat_F,find_repeat_R))
                     return results
                 break
 if __name__ == '__main__':
@@ -125,7 +158,7 @@ if __name__ == '__main__':
         result=md.KASP(sequences, Chr, position, alt)
         #print(result)
         if result is not None and result[0] is not None:
-            A1_primer, A2_primer, reverse_primer, hairpin_check, dimer_check = result[0]
+            A1_primer, A2_primer, reverse_primer, hairpin_check, dimer_check,GC_F,GC_R,repeat_F,repeat_R = result[0]
             primer, tm, size = reverse_primer[0]
             data.append({
                 'Chr': Chr,
@@ -133,10 +166,14 @@ if __name__ == '__main__':
                 'Alt': alt,
                 'A1_Primer': A1_primer,
                 'A2_Primer': A2_primer,
+                'GC content for forward primer': GC_F,
+                'Repeats within forward primer':repeat_F,
                 'Reverse_Primer': primer,
+                'GC content for reverse primer': GC_R,
+                'Repeats within reverse primer': repeat_R,
                 'Tm': tm,
                 'Product size': size,
-                'hairpin':hairpin_check,
+                'Hairpin':hairpin_check,
                 'Primer dimer':dimer_check
             })
         else:

@@ -39,7 +39,14 @@ class MarkerDesign():
             if found:
                 break
         return potential_primers[:1]
-
+    def calculate_gc_content(self, sequence):
+        # Normalize the sequence to uppercase for consistent counting
+        sequence = sequence.upper()
+        # Count G and C bases
+        gc_count = sequence.count('G') + sequence.count('C')
+        # Calculate GC content as a percentage of the total length
+        gc_content = (gc_count / len(sequence)) * 100
+        return gc_content
     def primer_dimer_check(self, primer1, primer2, threshold=5):
         end_primer1 = primer1[-threshold:]
         end_primer2 = self.reverse_complement(primer2[-threshold:])
@@ -75,14 +82,16 @@ class MarkerDesign():
                         filtered_primers.append((primer, tm, len(A1) + len(primer) + pos))
                         has_hairpin = self.find_hairpins(primer)
                         has_dimer = self.primer_dimer_check(A1, primer) or self.primer_dimer_check(A2, primer)
+                        GC_forward = self.calculate_gc_content(A1)
+                        GC_reverse = self.calculate_gc_content(primer)
                         if not has_hairpin and not has_dimer:
-                            results.append((A1, A2, filtered_primers[-1:], "No", 'No'))
+                            results.append((A1, A2, filtered_primers[-1:], "No", 'No',GC_forward,GC_reverse))
                         elif has_hairpin and not has_dimer:
-                            results.append((A1, A2, filtered_primers[:1], "Yes", 'No'))
+                            results.append((A1, A2, filtered_primers[:1], "Yes", 'No',GC_forward,GC_reverse))
                         elif not has_hairpin and has_dimer:
-                            results.append((A1, A2, filtered_primers[:1], "No", 'Yes'))
+                            results.append((A1, A2, filtered_primers[:1], "No", 'Yes',GC_forward,GC_reverse))
                         else:
-                            results.append((A1, A2, filtered_primers[:1], "Yes", 'Yes'))
+                            results.append((A1, A2, filtered_primers[:1], "Yes", 'Yes',GC_forward,GC_reverse))
                         return results
         return None
 
@@ -113,7 +122,7 @@ def main():
         for future in tqdm(as_completed(future_to_marker), total=len(task_args), desc="Processing markers"):
             result = future.result()
             if result is not None and result[0] is not None:
-                A1_primer, A2_primer, reverse_primer, hairpin_check, dimer_check = result[0]
+                A1_primer, A2_primer, reverse_primer, hairpin_check, dimer_check,GC_F,GC_R = result[0]
                 primer, tm, size = reverse_primer[0]
                 data.append({
                     'Chr': future_to_marker[future][1],
@@ -121,10 +130,12 @@ def main():
                     'Alt': future_to_marker[future][3],
                     'A1_Primer': A1_primer,
                     'A2_Primer': A2_primer,
+                    'GC content for forward primer': GC_F,
                     'Reverse_Primer': primer,
+                    'GC content for reverse primer': GC_R,
                     'Tm': tm,
                     'Product size': size,
-                    'hairpin': hairpin_check,
+                    'Hairpin': hairpin_check,
                     'Primer dimer': dimer_check
                 })
 
