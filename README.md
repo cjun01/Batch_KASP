@@ -2,7 +2,7 @@
 # KASP Marker Design Tool
 
 ## Overview
-The KASP Marker Design Tool is a Python-based utility designed to assist in the design of KASP (Kompetitive Allele Specific PCR) markers. It automates the process of designing forward (FAM and VIC labeled) and reverse primers for a given set of genetic markers, taking into consideration factors like melting temperature (Tm), potential hairpin structures, and possible primer dimer.
+The KASP Marker Design Tool is a Python-based utility designed to assist in the design of KASP (Kompetitive Allele Specific PCR) markers. It automates the process of designing forward (FAM and VIC labeled) and reverse primers for a given set of SNPs, taking into consideration factors like melting temperature (Tm), potential hairpin structures, and possible primer dimer.
 
 ## Features
 - Automated primer design for KASP markers.
@@ -24,15 +24,15 @@ The tool can be executed from the command line by providing paths to the input g
 
 ### Command Line Arguments
 - `-g` or `--genome_path`: Path to the genome FASTA file.
-- `-m` or `--marker_csv`: Path to the CSV file containing marker information. This file should have columns for Chromosome (`Chr`), Position (`Position`), and Alternate allele (`Alt`).
+- `-m` or `--marker_csv`: Path to the CSV file containing marker information. This file should have columns for Chromosome (`Chr`), Position (`position`), and Alternate allele (`alt`).
 - `-o` or `--output_csv`: Path to save the output CSV file with primer designs.
 
 ### Running the Tool
 ## Input File Format
 The marker information CSV file should contain three columns:
 - `Chr`: Chromosome name or number.
-- `Position`: Position of the SNP.
-- `Alt`: Alternate allele at SNP position.
+- `position`: Position of the SNP.
+- `alt`: Alternate allele at SNP position.
 
 Example of marker CSV: SNP_position.csv
 
