@@ -6,6 +6,7 @@ The KASP Marker Design Tool is a Python-based utility designed to assist in the 
 
 ## Features
 - Automated primer design for KASP markers.
+- Pre-filtering capabilities to ensure high-quality SNP selection.
 - Customizable Tm calculation and hairpin structure and primer dimer checking.
 - Command-line interface for easy use and integration into bioinformatics pipelines.
 
@@ -42,7 +43,11 @@ The output CSV file will contain the following columns:
 - `Alt`: Alternate allele.
 - `A1_Primer`: Forward primer labeled with FAM.
 - `A2_Primer`: Forward primer labeled with VIC, specific to the alternate allele.
+- `GC content for forward primer`: GC content for the A1 and A2 primers.
+- `Repeats within forward primer`: Any forms of repeats detected within the A1 and A2 primers.
 - `Reverse_Primer`: Common reverse primer.
+- `GC content for reverse primer`: GC content for the common reverse primer.
+- `Repeats within reverse primer`: Any forms of repeats detected within the common reverse primer.
 - `Tm`: Melting temperature primers in PCR.
 - `Product size`: Expected size of the amplified product.
 - `hairpin`: Check for potential hairpin structure.
