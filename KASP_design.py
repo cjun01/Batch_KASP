@@ -21,9 +21,8 @@ class MarkerDesign():
         df['prev_distance'] = df['position'] - df.groupby('Chr')['position'].shift(1)
 
         # Set defaults for edge cases where there's no previous or next SNP
-        df['prev_distance'].fillna(1000, inplace=True)  # No previous SNP, set previous distance to 1000
-        df['next_distance'].fillna(1000,
-                                   inplace=True)  # No next SNP, set next distance to 1000
+        df['prev_distance'] = df['prev_distance'].fillna(1000)  # No previous SNP, set previous distance to 1000
+        df['next_distance'] = df['next_distance'].fillna(1000)  # No next SNP, set next distance to 1000
 
         # Create a new DataFrame to hold the filtered SNPs
         filtered_snps = []
@@ -129,18 +128,21 @@ class MarkerDesign():
                             f"{max_repeats} repetitions of a {n}-nucleotide repeat: '{repeat}'")  # Significant repeat found, return "Yes"
 
         return "No"  # No significant repeats found, return "No"
-
+    def check(self,sequence,position,ref):
+        SNP_ref=sequence[position]
+        return SNP_ref==ref
     def KASP(self, sequences, chr, position, alter):
         # One-based position you're interested in
         target_position_one_based = position
         # Convert to zero-based for Python indexing
         target_position_zero_based = target_position_one_based - 1
         sequence = sequences.get(chr, None)
+        check=self.check(sequence,target_position_zero_based,ref)
         for length in range(18, 35):  # Includes 18 to 30
             left_sequence = sequence[target_position_zero_based - length:target_position_one_based]
             Tm_forward = self.find_TM(left_sequence)
             # Check if Tm is within the desired range
-            if 58 <= Tm_forward <= 63:
+            if 57 <= Tm_forward <= 65:
                 # Construct primers with the selected left sequence
                 A1 = FAM + left_sequence
                 A2 = VIC + left_sequence[:-1] + alter
@@ -164,13 +166,13 @@ class MarkerDesign():
                     find_repeat_F=self.find_repeats(A1)
                     find_repeat_R=self.find_repeats(primer)
                     if not has_hairpin and not has_dimer:
-                        results.append((A1, A2, filtered_primers[-1:], "No", 'No',GC_forward,GC_reverse,find_repeat_F,find_repeat_R))
+                        results.append((A1, A2, filtered_primers[-1:], "No", 'No',GC_forward,GC_reverse,find_repeat_F,find_repeat_R,check))
                     elif has_hairpin and not has_dimer:
-                        results.append((A1, A2, filtered_primers[:1], "Yes", 'No',GC_forward,GC_reverse,find_repeat_F,find_repeat_R))
+                        results.append((A1, A2, filtered_primers[:1], "Yes", 'No',GC_forward,GC_reverse,find_repeat_F,find_repeat_R,check))
                     elif not has_hairpin and has_dimer:
-                        results.append((A1, A2, filtered_primers[:1], "No", 'Yes',GC_forward,GC_reverse,find_repeat_F,find_repeat_R))
+                        results.append((A1, A2, filtered_primers[:1], "No", 'Yes',GC_forward,GC_reverse,find_repeat_F,find_repeat_R,check))
                     else:
-                        results.append((A1, A2, filtered_primers[:1], "Yes", 'Yes',GC_forward,GC_reverse,find_repeat_F,find_repeat_R))
+                        results.append((A1, A2, filtered_primers[:1], "Yes", 'Yes',GC_forward,GC_reverse,find_repeat_F,find_repeat_R,check))
                     return results
                 break
 
@@ -199,19 +201,22 @@ if __name__ == '__main__':
     marker_info = pd.read_csv(args.marker_csv)
     marker_filtered=md.filter_snps(marker_info)
     data = []
+
     for index, row in tqdm(marker_filtered.iterrows(), total=marker_filtered.shape[0], desc="Processing markers"):
     #for index, row in marker_filtered.iterrows():
         Chr = row.iloc[0]  # Selecting column 1
         position = row.iloc[1]  # Selecting column 2
-        alt = row.iloc[2]  # Selecting column 3
+        ref= row.iloc[2]
+        alt = row.iloc[3]  # Selecting column 4
         result=md.KASP(sequences, Chr, position, alt)
         #print(result)
         if result is not None and result[0] is not None:
-            A1_primer, A2_primer, reverse_primer, hairpin_check, dimer_check,GC_F,GC_R,repeat_F,repeat_R = result[0]
+            A1_primer, A2_primer, reverse_primer, hairpin_check, dimer_check,GC_F,GC_R,repeat_F,repeat_R,check = result[0]
             primer, tm, size = reverse_primer[0]
             data.append({
                 'Chr': Chr,
                 'Position': position,
+                'Ref':ref,
                 'Alt': alt,
                 'A1_Primer': A1_primer,
                 'A2_Primer': A2_primer,
@@ -223,7 +228,8 @@ if __name__ == '__main__':
                 'Tm': tm,
                 'Product size': size,
                 'Hairpin':hairpin_check,
-                'Primer dimer':dimer_check
+                'Primer dimer':dimer_check,
+                'SNP alignment Check':check,
             })
         else:
             continue
