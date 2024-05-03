@@ -32,6 +32,7 @@ The tool can be executed from the command line by providing paths to the input g
 The marker information CSV file should contain three columns:
 - `Chr`: Chromosome name or number.
 - `position`: Position of the SNP.
+- `ref`: Reference allele at SNP position.
 - `alt`: Alternate allele at SNP position.
 
 Example of marker CSV: SNP_position.csv
