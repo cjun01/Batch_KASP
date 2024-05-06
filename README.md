@@ -41,6 +41,7 @@ Example of marker CSV: SNP_position.csv
 The output CSV file will contain the following columns:
 - `Chr`: Chromosome.
 - `Position`: Position of the SNP.
+- `Ref`: Reference allele.
 - `Alt`: Alternate allele.
 - `A1_Primer`: Forward primer labeled with FAM.
 - `A2_Primer`: Forward primer labeled with VIC, specific to the alternate allele.
