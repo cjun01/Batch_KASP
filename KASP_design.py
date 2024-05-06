@@ -64,7 +64,8 @@ class MarkerDesign():
             for end in range(start + min_length, start + max_length+1):
                 primer = sequence[start:end]
                 reverse_tm = self.find_TM(primer)  # Corrected to pass 'primer' instead of 'seq'
-                if target_tm - tm_tolerance <= reverse_tm <= target_tm + tm_tolerance:
+                if target_tm - tm_tolerance <= reverse_tm <= target_tm + tm_tolerance and self.find_repeats(primer)=='No' \
+                        and self.calculate_gc_content(primer)>=40:
                     potential_primers.append((primer, reverse_tm,200-end+1))
                     if len(potential_primers) >= 5:  # Stop if we already have 2 primers
                         found = True  # Set the flag to true as we've found enough primers
@@ -105,7 +106,7 @@ class MarkerDesign():
         Returns 'Yes' along with details of the exact number of repetitions if any significant repeats are found, otherwise 'No'.
         """
         # Predefined thresholds for each repeat length
-        thresholds = {1: 6, 2: 4, 3: 4}  # Minimum repetitions: 6 for single, 5 for double, and 4 for triple nucleotides
+        thresholds = {1: 4, 2: 4, 3: 4}  # Minimum repetitions: 4 for single, 4 for double, and 4 for triple nucleotides
 
         sequence_length = len(sequence)
 
