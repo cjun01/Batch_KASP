@@ -52,5 +52,5 @@ The output CSV file will contain the following columns:
 - `Repeats within reverse primer`: Any forms of repeats detected within the common reverse primer.
 - `Tm`: Melting temperature primers in PCR.
 - `Product size`: Expected size of the amplified product.
-- `hairpin`: Check for potential hairpin structure.
+- `Hairpin`: Check for potential hairpin structure.
 - `Primer dimer`: Check for the possible formation of primer dimer.
