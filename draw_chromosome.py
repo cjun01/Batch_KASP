@@ -25,6 +25,7 @@ class ChromosomeSNP():
             # Draw the chromosome as a horizontal line
             x_start = 0
             x_end = x_start + length
+            print(x_end)
             y = y_positions[i]
             ax.plot([x_start, x_end], [y, y], color='gray', alpha=0.7, linewidth=8)
 
