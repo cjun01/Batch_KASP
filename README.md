@@ -23,6 +23,7 @@ The KASP Marker Design Tool is a Python-based utility designed to assist in the 
 The tool can be executed from the command line by providing paths to the input genome FASTA file, the CSV file containing marker information, and the desired path for the output CSV file containing the primer designs.
 
 ### Command Line Arguments
+- run python KASP_design.py with the followings:
 - `-g` or `--genome_path`: Path to the genome FASTA file.
 - `-m` or `--marker_csv`: Path to the CSV file containing marker information. This file should have columns for Chromosome (`Chr`), Position (`position`), and Alternate allele (`alt`).
 - `-o` or `--output_csv`: Path to save the output CSV file with primer designs.
