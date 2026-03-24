@@ -311,6 +311,8 @@ python KASP_design.py \
 
 By default, the current script now writes a **concise output table**: it keeps the strict internal screening and ranking logic, but only writes a smaller set of decision-useful columns. Use `--output_mode full` if you want the full diagnostic table.
 
+If a marker does not receive any written assay row, the script also writes a companion failed-marker report by default using the output stem plus `_failed.csv`. For example, `primer_designs.csv` is paired with `primer_designs_failed.csv`.
+
 ### Example: include a background VCF
 
 This is usually the recommended mode when your markers came from a larger variant set.
@@ -546,6 +548,7 @@ python KASP_design.py \
 - `--include_fallback` — write fallback rows when no `PASS` rows exist for that marker
 - `--preblast_top_n` — default `10`; with BLAST enabled, only this many best local candidates per marker are BLAST-screened
 - `--output_mode` — `concise` or `full`; default `concise`
+- `--failed_output_csv` — optional path for the companion failed-marker report; if omitted, the script uses `<output stem>_failed.csv` when needed
 
 ---
 
@@ -628,6 +631,31 @@ When BLAST screening is enabled, the concise output also adds:
 - `Worst_offtarget_3prime_bitscore`
 
 Use `--output_mode full` if you want the full diagnostic output described below and in the appendix.
+
+## Companion failed-marker report
+
+Markers that do not receive any written assay rows are written to a separate CSV. By default, the path is derived from the main output path:
+
+- main output: `primer_designs.csv`
+- failed-marker report: `primer_designs_failed.csv`
+
+The failed-marker report includes:
+
+- `Chr`
+- `Position`
+- `Ref`
+- `Alt`
+- `FASTA_base`
+- `FASTA_allele_annotation`
+- `TASSEL_major_allele_as_REF`
+- `Failure_reason`
+- `Failure_reason_counts`
+- `PASS_candidates_found`
+- `FALLBACK_candidates_found`
+
+`Failure_reason` is the dominant reason that no assay row was written for that marker, such as `missing_chromosome_in_fasta`, `position_out_of_range`, `ref_alt_do_not_match_fasta`, `no_candidate_found`, `thermo_fallback`, or the most common local primer-rejection category.
+
+`Failure_reason_counts` is a semicolon-delimited summary of the internal local rejection counts when those counts exist, for example `forward_allele_specific_tm=12;reverse_allele_specific_overlaps_variant=8`.
 
 ## Marker and FASTA annotation fields
 
@@ -732,12 +760,14 @@ The marker is rejected. This usually indicates one of the following:
 At the end of each run, the script prints a summary including:
 
 - `Output rows written`
+- `Markers without written output rows`
 - `Reference mismatches against FASTA`
 - `ALT matches FASTA and likely treated as REF by TASSEL`
 - `Outcome summary`
 - the resolved BLAST database path when BLAST screening is enabled
 - `BLAST database was auto-built for this run.` when applicable
 - `Output saved to ...`
+- `Failed-marker report saved to ...` when a companion report is written
 
 ### Common `Outcome summary` categories
 

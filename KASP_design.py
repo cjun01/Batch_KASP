@@ -68,6 +68,19 @@ CONCISE_BLAST_OUTPUT_COLUMNS: Sequence[str] = (
     "Total_off_target_3prime_hits",
     "Worst_offtarget_3prime_bitscore",
 )
+FAILED_OUTPUT_COLUMNS: Sequence[str] = (
+    "Chr",
+    "Position",
+    "Ref",
+    "Alt",
+    "FASTA_base",
+    "FASTA_allele_annotation",
+    "TASSEL_major_allele_as_REF",
+    "Failure_reason",
+    "Failure_reason_counts",
+    "PASS_candidates_found",
+    "FALLBACK_candidates_found",
+)
 
 
 def open_text(path: str):
@@ -184,7 +197,14 @@ class BackgroundIntervals:
     def finalize(self):
         for chrom, intervals in self._intervals.items():
             intervals.sort(key=lambda item: (item[0], item[1]))
-            self._starts[chrom] = [interval[0] for interval in intervals]
+            merged = []
+            for start, end in intervals:
+                if not merged or merged[-1][1] < start - 1:
+                    merged.append((start, end))
+                else:
+                    merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            self._intervals[chrom] = merged
+            self._starts[chrom] = [interval[0] for interval in merged]
 
     def has_overlap(
         self,
@@ -1053,7 +1073,7 @@ def combined_sort_key(candidate: dict):
     return (
         int(candidate.get("Total_exact_full_length_off_target_hits", 0)),
         int(candidate.get("Total_off_target_3prime_hits", 0)),
-        -float(candidate.get("Worst_offtarget_3prime_bitscore", 0.0)),
+        float(candidate.get("Worst_offtarget_3prime_bitscore", 0.0)),
         float(candidate["Local_score"]),
         float(candidate["worst_struct_tm"]),
         float(candidate["max_tm_delta"]),
@@ -1073,6 +1093,33 @@ def build_output_dataframe(results: List[dict], output_mode: str, blast_enabled:
         return pd.DataFrame(columns=selected_columns)
 
     return output_df.loc[:, [column for column in selected_columns if column in output_df.columns]]
+
+
+def format_failure_reason_counts(failure_reasons: Dict[str, int]) -> str:
+    if not failure_reasons:
+        return ""
+    return ";".join(
+        f"{reason}={count}"
+        for reason, count in sorted(failure_reasons.items(), key=lambda item: (-item[1], item[0]))
+    )
+
+
+def build_failed_output_path(output_csv: str, failed_output_csv: Optional[str] = None) -> str:
+    if failed_output_csv:
+        return failed_output_csv
+
+    output_path = Path(output_csv)
+    if output_path.suffix:
+        return str(output_path.with_name(f"{output_path.stem}_failed{output_path.suffix}"))
+    return f"{output_csv}_failed.csv"
+
+
+def build_failed_output_dataframe(failed_results: List[dict]) -> pd.DataFrame:
+    if not failed_results:
+        return pd.DataFrame(columns=FAILED_OUTPUT_COLUMNS)
+
+    failed_df = pd.DataFrame(failed_results)
+    return failed_df.loc[:, [column for column in FAILED_OUTPUT_COLUMNS if column in failed_df.columns]]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1146,6 +1193,13 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Output schema to write. 'concise' keeps the strict selection logic but writes a much smaller CSV; "
             "'full' writes all diagnostic columns."
+        ),
+    )
+    parser.add_argument(
+        "--failed_output_csv",
+        help=(
+            "Optional companion CSV for markers that do not receive any written assay rows. "
+            "Defaults to <output_csv stem>_failed.csv when needed."
         ),
     )
     parser.add_argument(
@@ -1240,6 +1294,7 @@ def main():
         )
 
     results = []
+    failed_results = []
     outcome_counts = defaultdict(int)
     ref_mismatch_count = 0
     alt_matches_fasta_count = 0
@@ -1259,6 +1314,7 @@ def main():
             "Position": int(row.Position),
             "Ref": row.Ref,
             "Alt": row.Alt,
+            "FASTA_base": "NA",
             "FASTA_allele_annotation": "NA",
             "TASSEL_major_allele_as_REF": "Unknown",
         }
@@ -1308,6 +1364,22 @@ def main():
                 if "Design_status" not in candidate:
                     candidate["Design_status"] = "PASS"
                 results.append(candidate)
+        else:
+            failed_results.append(
+                {
+                    "Chr": info.get("Chr", row.Chr),
+                    "Position": int(info.get("Position", row.Position)),
+                    "Ref": info.get("Ref", row.Ref),
+                    "Alt": info.get("Alt", row.Alt),
+                    "FASTA_base": info.get("FASTA_base", "NA"),
+                    "FASTA_allele_annotation": info.get("FASTA_allele_annotation", "NA"),
+                    "TASSEL_major_allele_as_REF": info.get("TASSEL_major_allele_as_REF", "Unknown"),
+                    "Failure_reason": marker_result["status"],
+                    "Failure_reason_counts": format_failure_reason_counts(marker_result.get("failure_reasons") or {}),
+                    "PASS_candidates_found": len(marker_result["pass_candidates"]),
+                    "FALLBACK_candidates_found": len(marker_result["fallback_candidates"]),
+                }
+            )
 
     output_df = build_output_dataframe(
         results,
@@ -1316,8 +1388,15 @@ def main():
     )
     output_df.to_csv(args.output_csv, index=False)
 
+    failed_output_path = None
+    if failed_results or args.failed_output_csv:
+        failed_output_path = build_failed_output_path(args.output_csv, args.failed_output_csv)
+        failed_output_df = build_failed_output_dataframe(failed_results)
+        failed_output_df.to_csv(failed_output_path, index=False)
+
     print(f"Output rows written: {len(results)}")
     print(f"Output mode: {args.output_mode}")
+    print(f"Markers without written output rows: {len(failed_results)}")
     print(f"Reference mismatches against FASTA: {ref_mismatch_count}")
     print(f"ALT matches FASTA and likely treated as REF by TASSEL: {alt_matches_fasta_count}")
     print("Outcome summary:")
@@ -1328,6 +1407,8 @@ def main():
         if built_blast_db:
             print("BLAST database was auto-built for this run.")
     print(f"Output saved to {args.output_csv}")
+    if failed_output_path:
+        print(f"Failed-marker report saved to {failed_output_path}")
 
 
 if __name__ == "__main__":
