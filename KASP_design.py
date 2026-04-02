@@ -68,6 +68,16 @@ CONCISE_BLAST_OUTPUT_COLUMNS: Sequence[str] = (
     "Total_off_target_3prime_hits",
     "Worst_offtarget_3prime_bitscore",
 )
+TALL_OUTPUT_COLUMNS: Sequence[str] = (
+    "Primer_ID",
+    "Primer_Sequence",
+)
+TALL_PRIMER_COLUMNS: Sequence[str] = (
+    "A1_Primer",
+    "A2_Primer",
+    "Common_Primer",
+    "Reverse_Primer",
+)
 FAILED_OUTPUT_COLUMNS: Sequence[str] = (
     "Chr",
     "Position",
@@ -1080,6 +1090,29 @@ def combined_sort_key(candidate: dict):
     )
 
 
+def common_primer_sites_too_close(candidate_a: dict, candidate_b: dict, min_gap: int) -> bool:
+    gap = max(0, int(min_gap))
+    start_a = int(candidate_a["Common_primer_span_start"])
+    end_a = int(candidate_a["Common_primer_span_end"])
+    start_b = int(candidate_b["Common_primer_span_start"])
+    end_b = int(candidate_b["Common_primer_span_end"])
+    return not (end_a + gap < start_b or end_b + gap < start_a)
+
+
+def diversify_ranked_candidates(candidates: List[dict], top_n: int, min_common_primer_gap: int) -> List[dict]:
+    if top_n <= 0:
+        return []
+
+    selected = []
+    for candidate in candidates:
+        if any(common_primer_sites_too_close(candidate, kept, min_common_primer_gap) for kept in selected):
+            continue
+        selected.append(candidate)
+        if len(selected) >= top_n:
+            break
+    return selected
+
+
 def build_output_dataframe(results: List[dict], output_mode: str, blast_enabled: bool) -> pd.DataFrame:
     output_df = pd.DataFrame(results)
     if output_mode == "full":
@@ -1093,6 +1126,44 @@ def build_output_dataframe(results: List[dict], output_mode: str, blast_enabled:
         return pd.DataFrame(columns=selected_columns)
 
     return output_df.loc[:, [column for column in selected_columns if column in output_df.columns]]
+
+
+def format_tall_rank(value) -> str:
+    if pd.isna(value):
+        return "NA"
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    return str(value)
+
+
+def build_tall_output_dataframe(output_df: pd.DataFrame) -> pd.DataFrame:
+    if output_df.empty:
+        return pd.DataFrame(columns=TALL_OUTPUT_COLUMNS)
+
+    primer_columns = [column for column in TALL_PRIMER_COLUMNS if column in output_df.columns]
+    if not primer_columns:
+        return pd.DataFrame(columns=TALL_OUTPUT_COLUMNS)
+
+    tall_rows = []
+    for record in output_df.to_dict("records"):
+        chrom = str(record.get("Chr", "NA"))
+        position = record.get("Position", "NA")
+        rank = format_tall_rank(record.get("Rank"))
+        for primer_column in primer_columns:
+            sequence = record.get(primer_column, "")
+            if pd.isna(sequence):
+                continue
+            sequence = str(sequence).strip()
+            if not sequence:
+                continue
+            tall_rows.append(
+                {
+                    "Primer_ID": f"{chrom}_{position}_rank{rank}_{primer_column}",
+                    "Primer_Sequence": sequence,
+                }
+            )
+
+    return pd.DataFrame(tall_rows, columns=TALL_OUTPUT_COLUMNS)
 
 
 def format_failure_reason_counts(failure_reasons: Dict[str, int]) -> str:
@@ -1176,6 +1247,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of ranked PASS assays to keep per SNP in the output.",
     )
     parser.add_argument(
+        "--min_common_primer_gap",
+        type=int,
+        default=5,
+        help=(
+            "Require reported assays for the same SNP to have common-primer binding sites separated by at "
+            "least this many bases. Set to 0 to allow overlapping common primers in the output."
+        ),
+    )
+    parser.add_argument(
         "--include_fallback",
         action="store_true",
         help="If no PASS assays exist for a SNP, include up to top_n FALLBACK assays in the output.",
@@ -1200,6 +1280,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Optional companion CSV for markers that do not receive any written assay rows. "
             "Defaults to <output_csv stem>_failed.csv when needed."
+        ),
+    )
+    parser.add_argument(
+        "--tall_output_csv",
+        help=(
+            "Optional tall-format companion CSV with one primer per row. "
+            "Writes Primer_ID and Primer_Sequence columns, where Primer_ID is "
+            "Chr_Position_rank<Rank>_<PrimerColumn>."
         ),
     )
     parser.add_argument(
@@ -1325,29 +1413,61 @@ def main():
 
         selected = []
         if marker_result["pass_candidates"]:
-            local_top = marker_result["pass_candidates"][: max(1, args.preblast_top_n)] if blast_checker else marker_result["pass_candidates"]
+            local_top = (
+                diversify_ranked_candidates(
+                    marker_result["pass_candidates"],
+                    max(1, args.preblast_top_n),
+                    args.min_common_primer_gap,
+                )
+                if blast_checker
+                else marker_result["pass_candidates"]
+            )
             if blast_checker and local_top:
                 annotate_offtarget_metrics(local_top, blast_checker)
                 local_top.sort(key=combined_sort_key)
                 for candidate in local_top:
                     candidate["Ranking_mode"] = "local_plus_blast"
-                selected = local_top[: max(1, args.top_n)]
+                selected = diversify_ranked_candidates(
+                    local_top,
+                    max(1, args.top_n),
+                    args.min_common_primer_gap,
+                )
             else:
                 for candidate in marker_result["pass_candidates"]:
                     candidate["Ranking_mode"] = "local_only"
-                selected = marker_result["pass_candidates"][: max(1, args.top_n)]
+                selected = diversify_ranked_candidates(
+                    marker_result["pass_candidates"],
+                    max(1, args.top_n),
+                    args.min_common_primer_gap,
+                )
         elif args.include_fallback and marker_result["fallback_candidates"]:
-            fallback_top = marker_result["fallback_candidates"][: max(1, args.preblast_top_n)] if blast_checker else marker_result["fallback_candidates"]
+            fallback_top = (
+                diversify_ranked_candidates(
+                    marker_result["fallback_candidates"],
+                    max(1, args.preblast_top_n),
+                    args.min_common_primer_gap,
+                )
+                if blast_checker
+                else marker_result["fallback_candidates"]
+            )
             if blast_checker and fallback_top:
                 annotate_offtarget_metrics(fallback_top, blast_checker)
                 fallback_top.sort(key=combined_sort_key)
                 for candidate in fallback_top:
                     candidate["Ranking_mode"] = "fallback_local_plus_blast"
-                selected = fallback_top[: max(1, args.top_n)]
+                selected = diversify_ranked_candidates(
+                    fallback_top,
+                    max(1, args.top_n),
+                    args.min_common_primer_gap,
+                )
             else:
                 for candidate in marker_result["fallback_candidates"]:
                     candidate["Ranking_mode"] = "fallback_local_only"
-                selected = marker_result["fallback_candidates"][: max(1, args.top_n)]
+                selected = diversify_ranked_candidates(
+                    marker_result["fallback_candidates"],
+                    max(1, args.top_n),
+                    args.min_common_primer_gap,
+                )
             for candidate in selected:
                 candidate["Design_status"] = "FALLBACK"
 
@@ -1388,6 +1508,12 @@ def main():
     )
     output_df.to_csv(args.output_csv, index=False)
 
+    tall_output_path = None
+    if args.tall_output_csv:
+        tall_output_path = args.tall_output_csv
+        tall_output_df = build_tall_output_dataframe(output_df)
+        tall_output_df.to_csv(tall_output_path, index=False)
+
     failed_output_path = None
     if failed_results or args.failed_output_csv:
         failed_output_path = build_failed_output_path(args.output_csv, args.failed_output_csv)
@@ -1407,6 +1533,8 @@ def main():
         if built_blast_db:
             print("BLAST database was auto-built for this run.")
     print(f"Output saved to {args.output_csv}")
+    if tall_output_path:
+        print(f"Tall-format output saved to {tall_output_path}")
     if failed_output_path:
         print(f"Failed-marker report saved to {failed_output_path}")
 
