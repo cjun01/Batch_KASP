@@ -299,7 +299,57 @@ A recommended workflow is:
 
 You can prepare a marker CSV manually or convert from VCF.
 
-If your helper script outputs only SNPs, you may need to add indel rows yourself or extend the converter.
+### Convert from VCF with `vcf_to_kasp_csv.py`
+
+Use the helper script to convert a `.vcf` or `.vcf.gz` file into the marker CSV format required by the design script:
+
+```bash
+python vcf_to_kasp_csv.py \
+  -i input.vcf.gz \
+  -o target_markers.csv
+```
+
+Keep only markers for a specific sample:
+
+```bash
+python vcf_to_kasp_csv.py \
+  -i input.vcf.gz \
+  -o target_markers.csv \
+  -s SampleName
+```
+
+Keep only non-reference genotypes (`0/1` and `1/1`) for that sample:
+
+```bash
+python vcf_to_kasp_csv.py \
+  -i input.vcf.gz \
+  -o target_markers.csv \
+  -s SampleName \
+  --genotype nonref
+```
+
+Skip contigs whose names contain a substring such as `unitig`:
+
+```bash
+python vcf_to_kasp_csv.py \
+  -i input.vcf.gz \
+  -o target_markers.csv \
+  --exclude-contig-substring unitig
+```
+
+Show all options:
+
+```bash
+python vcf_to_kasp_csv.py --help
+```
+
+Notes:
+- the output columns are `Chr,position,ref,alt`
+- the helper writes only simple biallelic SNPs
+- indels, multi-allelic sites, and non-ACGT alleles are skipped
+- if you provide `-s/--sample` and omit `--genotype`, the default genotype filter is `alt` (`1/1`)
+
+If you need indel rows, you may need to add them manually or extend the converter.
 
 Examples of accepted rows:
 
