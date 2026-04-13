@@ -52,6 +52,12 @@ CONCISE_OUTPUT_COLUMNS: Sequence[str] = (
     "Allele_specific_span_end",
     "Common_primer_span_start",
     "Common_primer_span_end",
+    "Shared_variant_tolerance_used",
+    "Shared_variant_positions",
+    "Shared_variant_count",
+    "Shared_variant_warning",
+    "A1_shared_variant_min_3prime_distance",
+    "A2_shared_variant_min_3prime_distance",
     "A1_core_tm",
     "A2_core_tm",
     "Common_core_tm",
@@ -245,17 +251,27 @@ class BackgroundIntervals:
         end: int,
         ignore_positions: Optional[Set[int]] = None,
     ) -> bool:
+        return bool(self.overlapping_positions(chrom, start, end, ignore_positions=ignore_positions))
+
+    def overlapping_positions(
+        self,
+        chrom: str,
+        start: int,
+        end: int,
+        ignore_positions: Optional[Set[int]] = None,
+    ) -> Set[int]:
         chrom_key = normalize_chrom_name(chrom)
         intervals = self._intervals.get(chrom_key)
         if not intervals:
-            return False
+            return set()
 
         starts = self._starts[chrom_key]
         idx = bisect_right(starts, end)
         if idx == 0:
-            return False
+            return set()
 
         ignored = set(ignore_positions or set())
+        positions: Set[int] = set()
         for i in range(idx - 1, -1, -1):
             iv_start, iv_end = intervals[i]
             if iv_end < start:
@@ -264,13 +280,10 @@ class BackgroundIntervals:
             overlap_end = min(end, iv_end)
             if overlap_start > overlap_end:
                 continue
-            if not ignored:
-                return True
-            overlap_len = overlap_end - overlap_start + 1
-            ignored_len = sum(1 for pos in ignored if overlap_start <= pos <= overlap_end)
-            if ignored_len < overlap_len:
-                return True
-        return False
+            for pos in range(overlap_start, overlap_end + 1):
+                if pos not in ignored:
+                    positions.add(pos)
+        return positions
 
 
 RANGE_DELETION_EMPTY_ALT_VALUES = {"", "-", ".", "DEL", "DELETION"}
@@ -655,6 +668,9 @@ class KASPDesigner:
         max_gc: float = 70.0,
         max_thermo_tm: float = 45.0,
         max_candidates_per_orientation: int = 200,
+        allow_shared_allele_primer_variants: bool = False,
+        max_shared_allele_variant_positions: int = 1,
+        min_shared_allele_variant_distance_3prime: int = 5,
     ):
         self.background = background
         self.thermo = thermo
@@ -672,6 +688,9 @@ class KASPDesigner:
         self.max_gc = max_gc
         self.max_thermo_tm = max_thermo_tm
         self.max_candidates_per_orientation = max_candidates_per_orientation
+        self.allow_shared_allele_primer_variants = allow_shared_allele_primer_variants
+        self.max_shared_allele_variant_positions = max(1, int(max_shared_allele_variant_positions))
+        self.min_shared_allele_variant_distance_3prime = max(0, int(min_shared_allele_variant_distance_3prime))
         self.ideal_product_size = (self.product_min + self.product_max) / 2.0
         self.ideal_tm = (self.tm_min + self.tm_max) / 2.0
         self.ideal_gc = 50.0
@@ -844,7 +863,7 @@ class KASPDesigner:
             "A2_Common_heterodimer_tm": float(a2_common_heterodimer.tm),
             "A1_A2_heterodimer_tm": float(a1_a2_heterodimer.tm),
         }
-    def local_score_tuple(self, result: dict) -> Tuple[float, float, float, float, float]:
+    def local_score_tuple(self, result: dict) -> Tuple[float, float, float, float, float, float]:
         gc_penalty = (
             abs(result["A1_core_gc"] - self.ideal_gc)
             + abs(result["A2_core_gc"] - self.ideal_gc)
@@ -856,6 +875,7 @@ class KASPDesigner:
             + abs(result["Common_core_tm"] - self.ideal_tm)
         )
         return (
+            int(self._shared_variant_used(result)),
             result["worst_struct_tm"],
             result["max_tm_delta"],
             abs(result["Product_size"] - self.ideal_product_size),
@@ -874,8 +894,12 @@ class KASPDesigner:
             + abs(result["A2_core_tm"] - self.ideal_tm)
             + abs(result["Common_core_tm"] - self.ideal_tm)
         )
+        shared_variant_penalty = 0.0
+        if self._shared_variant_used(result):
+            shared_variant_penalty = 10.0 + float(result.get("Shared_variant_count", 0)) * 2.0
         return (
-            result["worst_struct_tm"] * 10.0
+            shared_variant_penalty
+            + result["worst_struct_tm"] * 10.0
             + result["max_tm_delta"] * 5.0
             + abs(result["Product_size"] - self.ideal_product_size) * 0.5
             + gc_penalty * 0.25
@@ -897,6 +921,100 @@ class KASPDesigner:
             ),
         )
         return ordered[:limit]
+
+    @staticmethod
+    def _shared_variant_used(result: dict) -> bool:
+        value = str(result.get("Shared_variant_tolerance_used", "No")).strip().lower()
+        return value in {"yes", "true", "1"}
+
+    @staticmethod
+    def _three_prime_distance(direction: str, span_start: int, span_end: int, position: int) -> int:
+        if direction == "reverse":
+            return int(position) - int(span_start)
+        return int(span_end) - int(position)
+
+    def _single_candidate_overlap_allowed(
+        self,
+        direction: str,
+        span_start: int,
+        span_end: int,
+        overlap_positions: Set[int],
+    ) -> Tuple[bool, Optional[str], Optional[int]]:
+        if not overlap_positions:
+            return True, None, None
+        if len(overlap_positions) > self.max_shared_allele_variant_positions:
+            return False, "shared_allele_variant_overlap_exceeds_limit", None
+        min_distance = min(
+            self._three_prime_distance(direction, span_start, span_end, pos)
+            for pos in overlap_positions
+        )
+        if min_distance < self.min_shared_allele_variant_distance_3prime:
+            return False, "shared_allele_variant_too_close_to_3prime", min_distance
+        return True, None, min_distance
+
+    def _evaluate_shared_allele_variant_allowance(
+        self,
+        chrom: str,
+        a1_span_start: int,
+        a1_span_end: int,
+        a1_direction: str,
+        a2_span_start: int,
+        a2_span_end: int,
+        a2_direction: str,
+        ignore_positions: Optional[Set[int]] = None,
+    ) -> dict:
+        a1_positions = sorted(self.background.overlapping_positions(chrom, a1_span_start, a1_span_end, ignore_positions=ignore_positions))
+        a2_positions = sorted(self.background.overlapping_positions(chrom, a2_span_start, a2_span_end, ignore_positions=ignore_positions))
+
+        if not a1_positions and not a2_positions:
+            return {
+                "ok": True,
+                "used": False,
+                "positions": [],
+                "count": 0,
+                "warning": "",
+                "a1_min_distance": "",
+                "a2_min_distance": "",
+            }
+
+        if not self.allow_shared_allele_primer_variants:
+            return {"ok": False, "failure_reason": "allele_specific_overlaps_variant"}
+
+        if not a1_positions or not a2_positions or a1_positions != a2_positions:
+            return {"ok": False, "failure_reason": "shared_allele_variant_not_shared_between_a1_a2"}
+
+        if len(a1_positions) > self.max_shared_allele_variant_positions:
+            return {"ok": False, "failure_reason": "shared_allele_variant_overlap_exceeds_limit"}
+
+        a1_min_distance = min(
+            self._three_prime_distance(a1_direction, a1_span_start, a1_span_end, pos)
+            for pos in a1_positions
+        )
+        a2_min_distance = min(
+            self._three_prime_distance(a2_direction, a2_span_start, a2_span_end, pos)
+            for pos in a2_positions
+        )
+        if (
+            a1_min_distance < self.min_shared_allele_variant_distance_3prime
+            or a2_min_distance < self.min_shared_allele_variant_distance_3prime
+        ):
+            return {"ok": False, "failure_reason": "shared_allele_variant_too_close_to_3prime"}
+
+        positions_text = ";".join(str(pos) for pos in a1_positions)
+        warning = (
+            "Allowed shared non-target variant overlap in the common region of A1/A2 at position(s): "
+            f"{positions_text}. Minimum distance from the 3' end: "
+            f"A1={a1_min_distance} nt, A2={a2_min_distance} nt."
+        )
+        return {
+            "ok": True,
+            "used": True,
+            "positions": a1_positions,
+            "count": len(a1_positions),
+            "warning": warning,
+            "a1_min_distance": a1_min_distance,
+            "a2_min_distance": a2_min_distance,
+        }
 
     def _hap_local_to_reference_span(
         self,
@@ -968,8 +1086,20 @@ class KASPDesigner:
                     ref_len,
                     right_flank_start_1b,
                 )
-                if self.background.has_overlap(chrom, span_start, span_end, ignore_positions=ignore_positions):
-                    continue
+                overlap_positions = self.background.overlapping_positions(chrom, span_start, span_end, ignore_positions=ignore_positions)
+                if overlap_positions:
+                    if not self.allow_shared_allele_primer_variants:
+                        continue
+                    candidate_ok, _reason, min_distance = self._single_candidate_overlap_allowed(
+                        "forward",
+                        span_start,
+                        span_end,
+                        overlap_positions,
+                    )
+                    if not candidate_ok:
+                        continue
+                else:
+                    min_distance = None
                 candidates.append(
                     {
                         "core": core,
@@ -977,6 +1107,9 @@ class KASPDesigner:
                         "gc": gc,
                         "span_start": span_start,
                         "span_end": span_end,
+                        "direction": "forward",
+                        "overlap_positions": sorted(overlap_positions),
+                        "min_overlap_distance_3prime": min_distance,
                     }
                 )
         return self._sort_allele_candidates(candidates)
@@ -1022,8 +1155,20 @@ class KASPDesigner:
                     ref_len,
                     right_flank_start_1b,
                 )
-                if self.background.has_overlap(chrom, span_start, span_end, ignore_positions=ignore_positions):
-                    continue
+                overlap_positions = self.background.overlapping_positions(chrom, span_start, span_end, ignore_positions=ignore_positions)
+                if overlap_positions:
+                    if not self.allow_shared_allele_primer_variants:
+                        continue
+                    candidate_ok, _reason, min_distance = self._single_candidate_overlap_allowed(
+                        "reverse",
+                        span_start,
+                        span_end,
+                        overlap_positions,
+                    )
+                    if not candidate_ok:
+                        continue
+                else:
+                    min_distance = None
                 candidates.append(
                     {
                         "core": core,
@@ -1031,6 +1176,9 @@ class KASPDesigner:
                         "gc": gc,
                         "span_start": span_start,
                         "span_end": span_end,
+                        "direction": "reverse",
+                        "overlap_positions": sorted(overlap_positions),
+                        "min_overlap_distance_3prime": min_distance,
                     }
                 )
         return self._sort_allele_candidates(candidates)
@@ -1056,7 +1204,16 @@ class KASPDesigner:
         common_gc: float,
         product_size: int,
         pair_eval: dict,
+        shared_variant_assessment: Optional[dict] = None,
     ) -> dict:
+        shared_variant_assessment = shared_variant_assessment or {
+            "used": False,
+            "positions": [],
+            "count": 0,
+            "warning": "",
+            "a1_min_distance": "",
+            "a2_min_distance": "",
+        }
         return {
             **base_info,
             "Orientation": orientation,
@@ -1074,6 +1231,12 @@ class KASPDesigner:
             "Allele_specific_span_end": max(a1_span_end, a2_span_end),
             "Common_primer_span_start": common_start,
             "Common_primer_span_end": common_end,
+            "Shared_variant_tolerance_used": "Yes" if shared_variant_assessment.get("used") else "No",
+            "Shared_variant_positions": ";".join(str(pos) for pos in shared_variant_assessment.get("positions", [])),
+            "Shared_variant_count": int(shared_variant_assessment.get("count", 0)),
+            "Shared_variant_warning": shared_variant_assessment.get("warning", ""),
+            "A1_shared_variant_min_3prime_distance": shared_variant_assessment.get("a1_min_distance", ""),
+            "A2_shared_variant_min_3prime_distance": shared_variant_assessment.get("a2_min_distance", ""),
             "A1_core_tm": a1_tm,
             "A2_core_tm": a2_tm,
             "Common_core_tm": common_tm,
@@ -1117,8 +1280,20 @@ class KASPDesigner:
             if not (self.min_gc <= gc <= self.max_gc):
                 failure_reasons["forward_allele_specific_gc"] += 1
                 continue
-            if self.background.has_overlap(chrom, start0 + 1, pos0 + 1, ignore_positions=ignore_positions):
-                failure_reasons["forward_allele_specific_overlaps_variant"] += 1
+            shared_variant_assessment = self._evaluate_shared_allele_variant_allowance(
+                chrom,
+                start0 + 1,
+                pos0 + 1,
+                "forward",
+                start0 + 1,
+                pos0 + 1,
+                "forward",
+                ignore_positions=ignore_positions,
+            )
+            if not shared_variant_assessment.get("ok", False):
+                failure_reasons[
+                    "forward_" + shared_variant_assessment.get("failure_reason", "allele_specific_overlaps_variant")
+                ] += 1
                 continue
 
             a1_full = FAM + ref_core
@@ -1159,6 +1334,7 @@ class KASPDesigner:
                     common["gc"],
                     product_size,
                     pair_eval,
+                    shared_variant_assessment=shared_variant_assessment,
                 )
                 result = self._finalize_candidate(result)
                 if pair_eval["passed"]:
@@ -1190,8 +1366,20 @@ class KASPDesigner:
             if not (self.min_gc <= gc <= self.max_gc):
                 failure_reasons["reverse_allele_specific_gc"] += 1
                 continue
-            if self.background.has_overlap(chrom, pos1, end0, ignore_positions=ignore_positions):
-                failure_reasons["reverse_allele_specific_overlaps_variant"] += 1
+            shared_variant_assessment = self._evaluate_shared_allele_variant_allowance(
+                chrom,
+                pos1,
+                end0,
+                "reverse",
+                pos1,
+                end0,
+                "reverse",
+                ignore_positions=ignore_positions,
+            )
+            if not shared_variant_assessment.get("ok", False):
+                failure_reasons[
+                    "reverse_" + shared_variant_assessment.get("failure_reason", "allele_specific_overlaps_variant")
+                ] += 1
                 continue
 
             a1_full = FAM + ref_core
@@ -1232,6 +1420,7 @@ class KASPDesigner:
                     common["gc"],
                     product_size,
                     pair_eval,
+                    shared_variant_assessment=shared_variant_assessment,
                 )
                 result = self._finalize_candidate(result)
                 if pair_eval["passed"]:
@@ -1308,6 +1497,19 @@ class KASPDesigner:
             for a2 in alt_forward:
                 if abs(a1["tm"] - a2["tm"]) > self.tm_tolerance:
                     continue
+                shared_variant_assessment = self._evaluate_shared_allele_variant_allowance(
+                    chrom,
+                    a1["span_start"],
+                    a1["span_end"],
+                    "forward",
+                    a2["span_start"],
+                    a2["span_end"],
+                    "forward",
+                    ignore_positions=ignore_positions,
+                )
+                if not shared_variant_assessment.get("ok", False):
+                    failure_reasons["indel_forward_" + shared_variant_assessment.get("failure_reason", "allele_specific_overlaps_variant")] += 1
+                    continue
                 target_tm = (a1["tm"] + a2["tm"]) / 2.0
                 for common in self.common_reverse_candidates(
                     chrom,
@@ -1352,6 +1554,7 @@ class KASPDesigner:
                         common["gc"],
                         product_size,
                         pair_eval,
+                        shared_variant_assessment=shared_variant_assessment,
                     )
                     result = self._finalize_candidate(result)
                     if pair_eval["passed"]:
@@ -1362,6 +1565,19 @@ class KASPDesigner:
         for a1 in ref_reverse:
             for a2 in alt_reverse:
                 if abs(a1["tm"] - a2["tm"]) > self.tm_tolerance:
+                    continue
+                shared_variant_assessment = self._evaluate_shared_allele_variant_allowance(
+                    chrom,
+                    a1["span_start"],
+                    a1["span_end"],
+                    "reverse",
+                    a2["span_start"],
+                    a2["span_end"],
+                    "reverse",
+                    ignore_positions=ignore_positions,
+                )
+                if not shared_variant_assessment.get("ok", False):
+                    failure_reasons["indel_reverse_" + shared_variant_assessment.get("failure_reason", "allele_specific_overlaps_variant")] += 1
                     continue
                 target_tm = (a1["tm"] + a2["tm"]) / 2.0
                 for common in self.common_forward_candidates(
@@ -1407,6 +1623,7 @@ class KASPDesigner:
                         common["gc"],
                         product_size,
                         pair_eval,
+                        shared_variant_assessment=shared_variant_assessment,
                     )
                     result = self._finalize_candidate(result)
                     if pair_eval["passed"]:
@@ -1681,7 +1898,7 @@ def build_failed_output_dataframe(failed_results: List[dict]) -> pd.DataFrame:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Design KASP primers with strict nearby-variant rejection, Primer3 thermodynamic checks, "
+            "Design KASP primers with strict nearby-variant rejection, an optional controlled shared-overlap exception for A1/A2, Primer3 thermodynamic checks, "
             "multi-candidate ranking, and optional BLAST off-target screening."
         )
     )
@@ -1727,6 +1944,27 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=200,
         help="Cap on candidate common primers explored per orientation during local search.",
+    )
+    parser.add_argument(
+        "--allow_shared_allele_primer_variants",
+        action="store_true",
+        help=(
+            "Allow a limited exception where the same non-target variant position(s) overlap both A1 and A2 "
+            "in their shared region, provided the overlap stays sufficiently far from both 3' ends. "
+            "Accepted rows are flagged in the output."
+        ),
+    )
+    parser.add_argument(
+        "--max_shared_allele_variant_positions",
+        type=int,
+        default=1,
+        help="Maximum number of shared non-target variant positions allowed in both A1 and A2 when the tolerance flag is enabled.",
+    )
+    parser.add_argument(
+        "--min_shared_allele_variant_distance_3prime",
+        type=int,
+        default=5,
+        help="Minimum required distance in nucleotides from the 3' end of both A1 and A2 for any tolerated shared non-target variant.",
     )
     parser.add_argument(
         "--top_n",
@@ -1843,6 +2081,9 @@ def main():
         max_gc=args.max_gc,
         max_thermo_tm=args.max_thermo_tm,
         max_candidates_per_orientation=args.max_candidates_per_orientation,
+        allow_shared_allele_primer_variants=args.allow_shared_allele_primer_variants,
+        max_shared_allele_variant_positions=args.max_shared_allele_variant_positions,
+        min_shared_allele_variant_distance_3prime=args.min_shared_allele_variant_distance_3prime,
     )
 
     blast_checker = None

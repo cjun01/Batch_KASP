@@ -4,7 +4,7 @@
 
 This README is updated for the indel-capable script:
 
-- `primer_design_indel_v4_2.py`
+- `primer_design_indel_v4_3.py`
 
 If you later rename that file back to `KASP_design.py`, you can keep this README and just update the script name in the examples.
 
@@ -15,7 +15,8 @@ The main design engine:
 - supports SNPs plus simple insertions/deletions
 - accepts a human-readable deletion input style such as `13969-13971,GAT,-`
 - supports both common KASP assay orientations
-- rejects primers that overlap nearby known variants
+- rejects primers that overlap nearby known variants by default
+- can optionally tolerate a limited shared non-target variant overlap in the common region of both A1 and A2, with explicit warning columns in the output
 - uses **Primer3 thermodynamic checks** for hairpins and dimer interactions
 - keeps multiple valid candidates per marker
 - ranks candidates locally
@@ -32,7 +33,7 @@ The repository may also include helper utilities such as:
 
 ```text
 Batch_KASP/
-├── primer_design_indel_v4_2.py
+├── primer_design_indel_v4_3.py
 ├── vcf_to_kasp_csv.py
 ├── check_markers_against_fasta.py
 ├── requirements.txt
@@ -43,7 +44,7 @@ Batch_KASP/
 
 ## What the pipeline does
 
-For each marker, `primer_design_indel_v4_2.py` performs the following steps:
+For each marker, `primer_design_indel_v4_3.py` performs the following steps:
 
 1. **Loads the reference genome**
    - accepts FASTA or FASTA.gz
@@ -68,7 +69,8 @@ For each marker, `primer_design_indel_v4_2.py` performs the following steps:
    - all target markers are masked automatically
    - optional background variants from a VCF or CSV are also masked
    - the current target marker span is still allowed inside its own allele-specific primer region
-   - any other overlapping known variant causes that primer candidate to be rejected
+   - by default, any other overlapping known variant causes that primer candidate to be rejected
+   - optionally, the script can tolerate a very limited exception where the **same non-target variant position(s)** overlap both `A1` and `A2` in their shared region and remain sufficiently far from both 3' ends; accepted rows are flagged in the output
 
 5. **Searches supported KASP assay layouts**
    - for SNPs:
@@ -270,11 +272,15 @@ Behavior:
 
 **Important masking rule**
 
-The script is intentionally strict:
+By default, the script is intentionally strict:
 - the current target marker span is allowed for its own assay
 - any **other** masked variant overlapping a primer binding region causes rejection
 
-This means the pipeline prefers **cleaner assays** over maximizing the number of returned designs.
+Optional exception:
+- if you enable `--allow_shared_allele_primer_variants`, the script may keep a candidate when the **same non-target position(s)** overlap both `A1` and `A2`, the overlap count is within the configured limit, and the overlap remains far enough from both 3' ends
+- accepted rows are flagged with warning columns such as `Shared_variant_tolerance_used`, `Shared_variant_positions`, and `Shared_variant_warning`
+
+This means the pipeline still prefers **cleaner assays** over maximizing the number of returned designs, but now allows a controlled and transparent compromise for difficult loci.
 
 ---
 
@@ -334,20 +340,22 @@ You should inspect the resulting report before running large design jobs.
 Minimal local design example:
 
 ```bash
-python primer_design_indel_v4_2.py \
+python primer_design_indel_v4_3.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv
 ```
 
-By default, the script writes a **concise output table**: it keeps the strict internal screening and ranking logic, but only writes a smaller set of decision-useful columns. Use `--output_mode full` if you want the full diagnostic table.
+By default, the script writes a **concise output table**: it keeps the internal screening and ranking logic, but only writes a smaller set of decision-useful columns. Use `--output_mode full` if you want the full diagnostic table.
+
+When shared-variant tolerance is enabled and used for a returned row, the concise output also reports warning fields describing the tolerated overlap.
 
 If a marker does not receive any written assay row, the script also writes a companion failed-marker report by default using the output stem plus `_failed.csv`. For example, `primer_designs.csv` is paired with `primer_designs_failed.csv`.
 
 ### Example: include a background VCF
 
 ```bash
-python primer_design_indel_v4_2.py \
+python primer_design_indel_v4_3.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv \
@@ -357,7 +365,7 @@ python primer_design_indel_v4_2.py \
 ### Example: include a background CSV
 
 ```bash
-python primer_design_indel_v4_2.py \
+python primer_design_indel_v4_3.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv \
@@ -367,7 +375,7 @@ python primer_design_indel_v4_2.py \
 ### Example: stricter local filters
 
 ```bash
-python primer_design_indel_v4_2.py \
+python primer_design_indel_v4_3.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv \
@@ -376,6 +384,28 @@ python primer_design_indel_v4_2.py \
   --product_max 120 \
   --max_thermo_tm 40
 ```
+
+### Example: allow a controlled shared-variant exception in A1/A2
+
+Use this only for difficult loci where the same unavoidable non-target SNP position overlaps the shared region of both allele-specific primers.
+
+```bash
+python primer_design_indel_v4_3.py \
+  -g genome.fa \
+  -m target_markers.csv \
+  -o primer_designs.csv \
+  --background_vcf input.vcf.gz \
+  --allow_shared_allele_primer_variants \
+  --max_shared_allele_variant_positions 1 \
+  --min_shared_allele_variant_distance_3prime 5
+```
+
+This mode still rejects most overlap situations. It only tolerates shared non-target positions that:
+- hit both `A1` and `A2`
+- stay within the configured maximum count
+- remain at least the configured distance away from both 3' ends
+
+Accepted rows are clearly flagged in the output.
 
 ---
 
@@ -386,7 +416,7 @@ BLAST screening is optional and is mainly useful when the genome is large or rep
 ### Option A: use an existing BLAST database
 
 ```bash
-python primer_design_indel_v4_2.py \
+python primer_design_indel_v4_3.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv \
@@ -397,7 +427,7 @@ python primer_design_indel_v4_2.py \
 ### Option B: use the genome FASTA directly and auto-build the BLAST database
 
 ```bash
-python primer_design_indel_v4_2.py \
+python primer_design_indel_v4_3.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv \
@@ -416,7 +446,8 @@ The script does **not** stop at the first acceptable assay. Instead, it can keep
 For each marker:
 - supported orientations are explored
 - allele-specific and common primers must satisfy current length, Tm, and GC constraints
-- any primer overlapping a masked background variant is rejected, except for the marker's own target span
+- by default, any primer overlapping a masked background variant is rejected, except for the marker's own target span
+- when `--allow_shared_allele_primer_variants` is enabled, a limited shared-overlap exception can be applied only when the same non-target position(s) overlap both `A1` and `A2` and remain sufficiently far from both 3' ends
 - Primer3 structure checks are computed for each surviving candidate pair
 - each candidate gets a local ranking record
 
@@ -456,6 +487,8 @@ Candidates are locally ordered by `Local_score_tuple`, which stores:
 
 The script writes a scalar `Local_score`, but the primary local ordering is driven by this tuple.
 
+When shared-variant tolerance is used, the script adds an extra penalty so cleaner assays still rank ahead of tolerated-warning designs when otherwise comparable.
+
 ---
 
 ## `PASS` vs `FALLBACK`
@@ -468,10 +501,12 @@ Selected output rows use `Design_status`:
 - `PASS` — selected from candidates that satisfy the local pass criteria
 - `FALLBACK` — selected from weaker candidates only when no `PASS` candidates exist
 
+A row can still be `PASS` even when `Shared_variant_tolerance_used = Yes`, as long as it meets the thermodynamic and product-size thresholds. The warning fields tell you that a controlled overlap exception was used.
+
 By default, only `PASS` rows are written. To include fallback rows when a marker has no passing candidate:
 
 ```bash
-python primer_design_indel_v4_2.py \
+python primer_design_indel_v4_3.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv \
@@ -523,6 +558,11 @@ With BLAST:
 - `--max_gc` — default `70.0`
 - `--max_thermo_tm` — default `45.0`
 - `--max_candidates_per_orientation` — default `200`
+
+**Shared-variant tolerance settings**
+- `--allow_shared_allele_primer_variants` — enable a limited exception where the same non-target variant position(s) may overlap both `A1` and `A2` in their shared region, provided the overlap stays sufficiently far from both 3' ends; accepted rows are flagged
+- `--max_shared_allele_variant_positions` — default `1`; maximum number of shared non-target variant positions allowed in both `A1` and `A2` when the tolerance flag is enabled
+- `--min_shared_allele_variant_distance_3prime` — default `5`; minimum required distance in nucleotides from the 3' end of both `A1` and `A2` for any tolerated shared non-target variant
 
 **Output retention settings**
 - `--top_n` — default `5`; maximum number of written rows per marker
@@ -713,13 +753,13 @@ At the end of each run, the script prints a summary including:
 ### Example 1: simplest possible run
 
 ```bash
-python primer_design_indel_v4_2.py -g genome.fa -m markers.csv -o kasp_out.csv
+python primer_design_indel_v4_3.py -g genome.fa -m markers.csv -o kasp_out.csv
 ```
 
 ### Example 2: design run with background masking
 
 ```bash
-python primer_design_indel_v4_2.py \
+python primer_design_indel_v4_3.py \
   -g genome.fa \
   -m markers.csv \
   -o kasp_out.csv \
@@ -739,7 +779,7 @@ Chr,position,ref,alt
 Run:
 
 ```bash
-python primer_design_indel_v4_2.py \
+python primer_design_indel_v4_3.py \
   -g genome.fa \
   -m markers.csv \
   -o kasp_out.csv
@@ -748,7 +788,7 @@ python primer_design_indel_v4_2.py \
 ### Example 4: keep more candidate rows per marker
 
 ```bash
-python primer_design_indel_v4_2.py \
+python primer_design_indel_v4_3.py \
   -g genome.fa \
   -m markers.csv \
   -o kasp_out.csv \
@@ -758,7 +798,7 @@ python primer_design_indel_v4_2.py \
 ### Example 5: include fallback rows
 
 ```bash
-python primer_design_indel_v4_2.py \
+python primer_design_indel_v4_3.py \
   -g genome.fa \
   -m markers.csv \
   -o kasp_out.csv \
@@ -768,7 +808,7 @@ python primer_design_indel_v4_2.py \
 ### Example 6: BLAST-assisted ranking with auto database creation
 
 ```bash
-python primer_design_indel_v4_2.py \
+python primer_design_indel_v4_3.py \
   -g genome.fa \
   -m markers.csv \
   -o kasp_out.csv \
@@ -782,10 +822,23 @@ python primer_design_indel_v4_2.py \
   --blast_num_threads 4
 ```
 
-### Example 7: write a tall primer list
+### Example 7: allow a flagged shared-variant compromise design
 
 ```bash
-python primer_design_indel_v4_2.py \
+python primer_design_indel_v4_3.py \
+  -g genome.fa \
+  -m markers.csv \
+  -o kasp_out.csv \
+  --background_vcf all_variants.vcf.gz \
+  --allow_shared_allele_primer_variants \
+  --max_shared_allele_variant_positions 1 \
+  --min_shared_allele_variant_distance_3prime 5
+```
+
+### Example 8: write a tall primer list
+
+```bash
+python primer_design_indel_v4_3.py \
   -g genome.fa \
   -m markers.csv \
   -o kasp_out.csv \
@@ -798,9 +851,10 @@ python primer_design_indel_v4_2.py \
 
 1. Prepare a clean marker CSV containing supported SNP and indel rows.
 2. Validate marker positions and REF alleles against the reference with `check_markers_against_fasta.py`.
-3. Run `primer_design_indel_v4_2.py` using the original VCF or a background CSV when available.
+3. Run `primer_design_indel_v4_3.py` using the original VCF or a background CSV when available.
 4. Keep multiple ranked assays per marker if you want wet-lab choice.
-5. Add BLAST screening when specificity is a concern or when you want BLAST-assisted ranking.
+5. For difficult loci with unavoidable shared non-target variants in `A1` and `A2`, consider the flagged shared-variant tolerance mode.
+6. Add BLAST screening when specificity is a concern or when you want BLAST-assisted ranking.
 
 ---
 
@@ -813,6 +867,7 @@ Check these first:
 - marker rows use only supported SNP or simple indel formats
 - the REF allele truly matches the FASTA for indels
 - the background VCF or CSV is not so dense that nearly all primer candidates overlap another variant
+- if the locus has unavoidable shared non-target variants in both `A1` and `A2`, consider whether you want to enable the flagged tolerance mode
 - `--include_fallback` is off by default
 
 ### `Output rows written: 0`
@@ -826,6 +881,13 @@ This script currently does not support substitutions like `AT -> GC`. Split them
 
 ### Many markers fail as `*_overlaps_variant`
 This usually means the surrounding region is highly polymorphic. You may need to choose a different marker set, reduce background density, or increase the number of candidate regions scanned.
+
+For difficult loci where the **same unavoidable non-target position(s)** overlap both `A1` and `A2`, you can try:
+- `--allow_shared_allele_primer_variants`
+- `--max_shared_allele_variant_positions 1`
+- `--min_shared_allele_variant_distance_3prime 5`
+
+Returned rows that use this exception are clearly flagged in the output.
 
 ### Human-readable deletion rows are being skipped
 Check:
@@ -843,7 +905,8 @@ Make sure `blastn` is installed and visible in `PATH`, `makeblastdb` is installe
 This repository is intentionally conservative.
 
 It prefers:
-- rejecting primers that overlap known nearby variants
+- rejecting primers that overlap known nearby variants by default
+- allowing only a narrow, explicitly flagged exception for shared non-target positions in both `A1` and `A2` when you enable it
 - retaining multiple ranked designs per marker
 - using Primer3 for thermodynamic checks
 - optionally adding BLAST-based off-target visibility
@@ -908,6 +971,19 @@ The list below annotates the major columns written when the script is run with `
 | `A2_core_gc` | GC percentage of `A2_Core`. |
 | `Common_core_gc` | GC percentage of `Common_Core`. |
 | `Product_size` | Expected PCR amplicon size in base pairs using the script's current internal calculation. |
+
+### Shared-variant tolerance columns
+
+These columns are populated for all rows and are especially useful when `--allow_shared_allele_primer_variants` is enabled.
+
+| Column | Meaning |
+|---|---|
+| `Shared_variant_tolerance_used` | `Yes` if the optional shared-variant exception was used for this row, otherwise `No`. |
+| `Shared_variant_positions` | Semicolon-separated list of tolerated shared non-target variant positions overlapping both `A1` and `A2`. |
+| `Shared_variant_count` | Number of tolerated shared non-target variant positions. |
+| `Shared_variant_warning` | Human-readable explanation of the tolerated shared-overlap condition. |
+| `A1_shared_variant_min_3prime_distance` | Minimum distance in nucleotides from the 3' end of `A1` to any tolerated shared non-target variant position. |
+| `A2_shared_variant_min_3prime_distance` | Minimum distance in nucleotides from the 3' end of `A2` to any tolerated shared non-target variant position. |
 
 ### Thermodynamic and structure-check columns
 
