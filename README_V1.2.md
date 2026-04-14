@@ -1,10 +1,10 @@
 # Batch_KASP
 
-`Batch_KASP` is a batch KASP assay design workflow for **biallelic SNP markers and simple biallelic indels**. It takes a **reference genome FASTA** plus a **marker CSV** and returns one or more ranked KASP assay designs per target marker.
+`Batch_KASP` is a batch KASP assay design workflow for **biallelic SNP markers and simple biallelic indels**. It takes a **reference genome FASTA** plus a **marker CSV/TSV** and returns one or more ranked KASP assay designs per target marker.
 
 This README is updated for the indel-capable script:
 
-- `primer_design_indel_v4_3.py`
+- `primer_design_indel_v4_5.py`
 
 If you later rename that file back to `KASP_design.py`, you can keep this README and just update the script name in the examples.
 
@@ -33,7 +33,7 @@ The repository may also include helper utilities such as:
 
 ```text
 Batch_KASP/
-├── primer_design_indel_v4_3.py
+├── primer_design_indel_v4_5.py
 ├── vcf_to_kasp_csv.py
 ├── check_markers_against_fasta.py
 ├── requirements.txt
@@ -44,7 +44,7 @@ Batch_KASP/
 
 ## What the pipeline does
 
-For each marker, `primer_design_indel_v4_3.py` performs the following steps:
+For each marker, `primer_design_indel_v4_5.py` performs the following steps:
 
 1. **Loads the reference genome**
    - accepts FASTA or FASTA.gz
@@ -53,8 +53,11 @@ For each marker, `primer_design_indel_v4_3.py` performs the following steps:
 2. **Reads and cleans the marker table**
    - requires `Chr`, `position`, `ref`, and `alt`
    - treats column names case-insensitively
-   - accepts supported SNP and indel formats
+   - accepts **CSV/TSV marker tables only** for `--marker_csv`
+   - accepts supported SNP and indel formats inside that table
+   - can split comma-separated ALT alleles in the `alt` column into separate biallelic design targets
    - removes exact duplicate marker rows after normalization
+   - rejects raw `.vcf` and `.vcf.gz` files as `--marker_csv` input
 
 3. **Checks allele consistency against the FASTA**
    - `REF matches FASTA`
@@ -159,7 +162,7 @@ Examples:
 
 ---
 
-### 2) Marker CSV
+### 2) Marker CSV / TSV
 
 Argument:
 
@@ -173,7 +176,7 @@ Required columns:
 - `ref`
 - `alt`
 
-Column matching is case-insensitive.
+Column matching is case-insensitive. The marker file may be comma-separated or tab-separated, but it must remain a **marker table**, not a raw VCF file.
 
 ### Supported marker formats
 
@@ -206,6 +209,25 @@ Chr,position,ref,alt
 
 This means the reference allele is `GATC` and the alternate allele is `G` at the anchor position.
 
+#### C2. Comma-separated ALT alleles in the marker table
+
+```csv
+Chr,position,ref,alt
+ChrA01,30423823,TAA,"TCTTAAA,TCTTAAAA"
+```
+
+or, if saved as a TSV, the same logical columns with the `alt` cell containing:
+
+```text
+TCTTAAA,TCTTAAAA
+```
+
+The script splits this one marker-table row into separate biallelic design targets internally:
+- `TAA -> TCTTAAA`
+- `TAA -> TCTTAAAA`
+
+This is useful when you want to keep the older marker CSV/TSV workflow but still preserve multiple ALT alleles from upstream processing.
+
 #### D. Human-readable deletion range
 
 ```csv
@@ -235,13 +257,13 @@ These are rejected:
 - equal-length multibase substitutions such as `AT -> GC`
 - range rows that are not deletion-style
 - numeric rows with an empty ALT allele
-- multiallelic markers
+- raw `.vcf` or `.vcf.gz` files passed directly as `--marker_csv`
 
 ### Notes on indel input style
 
 - For **human readability**, deletion ranges like `13969-13971,GAT,-` are convenient.
 - For **insertions**, the script currently expects **anchored input**, not a human-readable range style.
-- If your indels come from a VCF, anchored indel rows are usually the cleanest direct input.
+- If your indels come from a VCF, convert or copy them into anchored CSV/TSV rows. The design script no longer accepts a raw VCF file directly as `--marker_csv`.
 
 ---
 
@@ -301,7 +323,7 @@ You can prepare a marker CSV manually or convert from VCF.
 
 ### Convert from VCF with `vcf_to_kasp_csv.py`
 
-Use the helper script to convert a `.vcf` or `.vcf.gz` file into the marker CSV format required by the design script:
+Use the helper script to convert a `.vcf` or `.vcf.gz` file into the marker CSV format required by the design script. This helper section is retained intentionally because it is still useful for SNP workflows:
 
 ```bash
 python vcf_to_kasp_csv.py \
@@ -346,7 +368,7 @@ python vcf_to_kasp_csv.py --help
 Notes:
 - the output columns are `Chr,position,ref,alt`
 - the helper writes only simple biallelic SNPs
-- indels, multi-allelic sites, and non-ACGT alleles are skipped
+- indels and most multi-allelic sites are skipped by the helper and still need to be added manually or by extending the converter
 - if you provide `-s/--sample` and omit `--genotype`, the default genotype filter is `alt` (`1/1`)
 
 If you need indel rows, you may need to add them manually or extend the converter.
@@ -359,6 +381,7 @@ Chr,position,ref,alt
 1LG6,1300,G,GATC
 1LG6,1300,GATC,G
 1LG6,13969-13971,GAT,-
+ChrA01,30423823,TAA,"TCTTAAA,TCTTAAAA"
 ```
 
 ---
@@ -390,13 +413,15 @@ You should inspect the resulting report before running large design jobs.
 Minimal local design example:
 
 ```bash
-python primer_design_indel_v4_3.py \
+python primer_design_indel_v4_5.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv
 ```
 
 By default, the script writes a **concise output table**: it keeps the internal screening and ranking logic, but only writes a smaller set of decision-useful columns. Use `--output_mode full` if you want the full diagnostic table.
+
+`--marker_csv` must still point to a marker CSV/TSV, not a raw VCF file. Use `vcf_to_kasp_csv.py` for SNP extraction or prepare indel rows manually in the same table format.
 
 When shared-variant tolerance is enabled and used for a returned row, the concise output also reports warning fields describing the tolerated overlap.
 
@@ -405,7 +430,7 @@ If a marker does not receive any written assay row, the script also writes a com
 ### Example: include a background VCF
 
 ```bash
-python primer_design_indel_v4_3.py \
+python primer_design_indel_v4_5.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv \
@@ -415,7 +440,7 @@ python primer_design_indel_v4_3.py \
 ### Example: include a background CSV
 
 ```bash
-python primer_design_indel_v4_3.py \
+python primer_design_indel_v4_5.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv \
@@ -425,7 +450,7 @@ python primer_design_indel_v4_3.py \
 ### Example: stricter local filters
 
 ```bash
-python primer_design_indel_v4_3.py \
+python primer_design_indel_v4_5.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv \
@@ -440,7 +465,7 @@ python primer_design_indel_v4_3.py \
 Use this only for difficult loci where the same unavoidable non-target SNP position overlaps the shared region of both allele-specific primers.
 
 ```bash
-python primer_design_indel_v4_3.py \
+python primer_design_indel_v4_5.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv \
@@ -466,7 +491,7 @@ BLAST screening is optional and is mainly useful when the genome is large or rep
 ### Option A: use an existing BLAST database
 
 ```bash
-python primer_design_indel_v4_3.py \
+python primer_design_indel_v4_5.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv \
@@ -477,7 +502,7 @@ python primer_design_indel_v4_3.py \
 ### Option B: use the genome FASTA directly and auto-build the BLAST database
 
 ```bash
-python primer_design_indel_v4_3.py \
+python primer_design_indel_v4_5.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv \
@@ -556,7 +581,7 @@ A row can still be `PASS` even when `Shared_variant_tolerance_used = Yes`, as lo
 By default, only `PASS` rows are written. To include fallback rows when a marker has no passing candidate:
 
 ```bash
-python primer_design_indel_v4_3.py \
+python primer_design_indel_v4_5.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv \
@@ -803,13 +828,13 @@ At the end of each run, the script prints a summary including:
 ### Example 1: simplest possible run
 
 ```bash
-python primer_design_indel_v4_3.py -g genome.fa -m markers.csv -o kasp_out.csv
+python primer_design_indel_v4_5.py -g genome.fa -m markers.csv -o kasp_out.csv
 ```
 
 ### Example 2: design run with background masking
 
 ```bash
-python primer_design_indel_v4_3.py \
+python primer_design_indel_v4_5.py \
   -g genome.fa \
   -m markers.csv \
   -o kasp_out.csv \
@@ -829,7 +854,7 @@ Chr,position,ref,alt
 Run:
 
 ```bash
-python primer_design_indel_v4_3.py \
+python primer_design_indel_v4_5.py \
   -g genome.fa \
   -m markers.csv \
   -o kasp_out.csv
@@ -838,7 +863,7 @@ python primer_design_indel_v4_3.py \
 ### Example 4: keep more candidate rows per marker
 
 ```bash
-python primer_design_indel_v4_3.py \
+python primer_design_indel_v4_5.py \
   -g genome.fa \
   -m markers.csv \
   -o kasp_out.csv \
@@ -848,7 +873,7 @@ python primer_design_indel_v4_3.py \
 ### Example 5: include fallback rows
 
 ```bash
-python primer_design_indel_v4_3.py \
+python primer_design_indel_v4_5.py \
   -g genome.fa \
   -m markers.csv \
   -o kasp_out.csv \
@@ -858,7 +883,7 @@ python primer_design_indel_v4_3.py \
 ### Example 6: BLAST-assisted ranking with auto database creation
 
 ```bash
-python primer_design_indel_v4_3.py \
+python primer_design_indel_v4_5.py \
   -g genome.fa \
   -m markers.csv \
   -o kasp_out.csv \
@@ -875,7 +900,7 @@ python primer_design_indel_v4_3.py \
 ### Example 7: allow a flagged shared-variant compromise design
 
 ```bash
-python primer_design_indel_v4_3.py \
+python primer_design_indel_v4_5.py \
   -g genome.fa \
   -m markers.csv \
   -o kasp_out.csv \
@@ -888,7 +913,7 @@ python primer_design_indel_v4_3.py \
 ### Example 8: write a tall primer list
 
 ```bash
-python primer_design_indel_v4_3.py \
+python primer_design_indel_v4_5.py \
   -g genome.fa \
   -m markers.csv \
   -o kasp_out.csv \
@@ -899,9 +924,9 @@ python primer_design_indel_v4_3.py \
 
 ## Recommended workflow
 
-1. Prepare a clean marker CSV containing supported SNP and indel rows.
+1. Prepare a clean marker CSV/TSV containing supported SNP and indel rows.
 2. Validate marker positions and REF alleles against the reference with `check_markers_against_fasta.py`.
-3. Run `primer_design_indel_v4_3.py` using the original VCF or a background CSV when available.
+3. Run `primer_design_indel_v4_5.py` using the original VCF or a background CSV when available.
 4. Keep multiple ranked assays per marker if you want wet-lab choice.
 5. For difficult loci with unavoidable shared non-target variants in `A1` and `A2`, consider the flagged shared-variant tolerance mode.
 6. Add BLAST screening when specificity is a concern or when you want BLAST-assisted ranking.
@@ -944,6 +969,19 @@ Check:
 - the position really uses `start-end`
 - the `ref` length matches the range length
 - the `alt` is empty, `-`, `.`, `DEL`, or `DELETION`
+
+### The script says raw VCF is not accepted as `--marker_csv`
+That is expected in the current version. Keep `--marker_csv` as a CSV/TSV marker table and use the VCF only for:
+- conversion with `vcf_to_kasp_csv.py`
+- background masking with `--background_vcf`
+
+For indels from a VCF, copy or convert the desired rows into anchored marker-table form such as:
+
+```csv
+Chr,position,ref,alt
+ChrA01,30423823,TAA,TCTTAAA
+```
+
 
 ### BLAST errors
 Make sure `blastn` is installed and visible in `PATH`, `makeblastdb` is installed if auto-building is enabled, the FASTA is readable, and the BLAST database path points to the database prefix rather than only a sidecar file.
