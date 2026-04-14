@@ -4,7 +4,7 @@
 
 This README is updated for the indel-capable script:
 
-- `primer_design_indel_v4_5.py`
+- `KASP_design_V1.2.py`
 
 If you later rename that file back to `KASP_design.py`, you can keep this README and just update the script name in the examples.
 
@@ -33,7 +33,7 @@ The repository may also include helper utilities such as:
 
 ```text
 Batch_KASP/
-├── primer_design_indel_v4_5.py
+├── KASP_design_V1.2.py
 ├── vcf_to_kasp_csv.py
 ├── check_markers_against_fasta.py
 ├── requirements.txt
@@ -44,7 +44,7 @@ Batch_KASP/
 
 ## What the pipeline does
 
-For each marker, `primer_design_indel_v4_5.py` performs the following steps:
+For each marker, `KASP_design_V1.2.py` performs the following steps:
 
 1. **Loads the reference genome**
    - accepts FASTA or FASTA.gz
@@ -413,7 +413,7 @@ You should inspect the resulting report before running large design jobs.
 Minimal local design example:
 
 ```bash
-python primer_design_indel_v4_5.py \
+python KASP_design_V1.2.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv
@@ -430,7 +430,7 @@ If a marker does not receive any written assay row, the script also writes a com
 ### Example: include a background VCF
 
 ```bash
-python primer_design_indel_v4_5.py \
+python KASP_design_V1.2.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv \
@@ -440,7 +440,7 @@ python primer_design_indel_v4_5.py \
 ### Example: include a background CSV
 
 ```bash
-python primer_design_indel_v4_5.py \
+python KASP_design_V1.2.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv \
@@ -450,7 +450,7 @@ python primer_design_indel_v4_5.py \
 ### Example: stricter local filters
 
 ```bash
-python primer_design_indel_v4_5.py \
+python KASP_design_V1.2.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv \
@@ -465,7 +465,7 @@ python primer_design_indel_v4_5.py \
 Use this only for difficult loci where the same unavoidable non-target SNP position overlaps the shared region of both allele-specific primers.
 
 ```bash
-python primer_design_indel_v4_5.py \
+python KASP_design_V1.2.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv \
@@ -491,7 +491,7 @@ BLAST screening is optional and is mainly useful when the genome is large or rep
 ### Option A: use an existing BLAST database
 
 ```bash
-python primer_design_indel_v4_5.py \
+python KASP_design_V1.2.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv \
@@ -502,7 +502,7 @@ python primer_design_indel_v4_5.py \
 ### Option B: use the genome FASTA directly and auto-build the BLAST database
 
 ```bash
-python primer_design_indel_v4_5.py \
+python KASP_design_V1.2.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv \
@@ -581,7 +581,7 @@ A row can still be `PASS` even when `Shared_variant_tolerance_used = Yes`, as lo
 By default, only `PASS` rows are written. To include fallback rows when a marker has no passing candidate:
 
 ```bash
-python primer_design_indel_v4_5.py \
+python KASP_design_V1.2.py \
   -g genome.fa \
   -m target_markers.csv \
   -o primer_designs.csv \
@@ -828,13 +828,13 @@ At the end of each run, the script prints a summary including:
 ### Example 1: simplest possible run
 
 ```bash
-python primer_design_indel_v4_5.py -g genome.fa -m markers.csv -o kasp_out.csv
+python KASP_design_V1.2.py -g genome.fa -m markers.csv -o kasp_out.csv
 ```
 
 ### Example 2: design run with background masking
 
 ```bash
-python primer_design_indel_v4_5.py \
+python KASP_design_V1.2.py \
   -g genome.fa \
   -m markers.csv \
   -o kasp_out.csv \
@@ -854,7 +854,7 @@ Chr,position,ref,alt
 Run:
 
 ```bash
-python primer_design_indel_v4_5.py \
+python KASP_design_V1.2.py \
   -g genome.fa \
   -m markers.csv \
   -o kasp_out.csv
@@ -863,7 +863,7 @@ python primer_design_indel_v4_5.py \
 ### Example 4: keep more candidate rows per marker
 
 ```bash
-python primer_design_indel_v4_5.py \
+python KASP_design_V1.2.py \
   -g genome.fa \
   -m markers.csv \
   -o kasp_out.csv \
@@ -873,7 +873,7 @@ python primer_design_indel_v4_5.py \
 ### Example 5: include fallback rows
 
 ```bash
-python primer_design_indel_v4_5.py \
+python KASP_design_V1.2.py \
   -g genome.fa \
   -m markers.csv \
   -o kasp_out.csv \
@@ -883,7 +883,7 @@ python primer_design_indel_v4_5.py \
 ### Example 6: BLAST-assisted ranking with auto database creation
 
 ```bash
-python primer_design_indel_v4_5.py \
+python KASP_design_V1.2.py \
   -g genome.fa \
   -m markers.csv \
   -o kasp_out.csv \
@@ -900,7 +900,7 @@ python primer_design_indel_v4_5.py \
 ### Example 7: allow a flagged shared-variant compromise design
 
 ```bash
-python primer_design_indel_v4_5.py \
+python KASP_design_V1.2.py \
   -g genome.fa \
   -m markers.csv \
   -o kasp_out.csv \
@@ -913,7 +913,7 @@ python primer_design_indel_v4_5.py \
 ### Example 8: write a tall primer list
 
 ```bash
-python primer_design_indel_v4_5.py \
+python KASP_design_V1.2.py \
   -g genome.fa \
   -m markers.csv \
   -o kasp_out.csv \
@@ -926,7 +926,7 @@ python primer_design_indel_v4_5.py \
 
 1. Prepare a clean marker CSV/TSV containing supported SNP and indel rows.
 2. Validate marker positions and REF alleles against the reference with `check_markers_against_fasta.py`.
-3. Run `primer_design_indel_v4_5.py` using the original VCF or a background CSV when available.
+3. Run `KASP_design_V1.2.py` using the original VCF or a background CSV when available.
 4. Keep multiple ranked assays per marker if you want wet-lab choice.
 5. For difficult loci with unavoidable shared non-target variants in `A1` and `A2`, consider the flagged shared-variant tolerance mode.
 6. Add BLAST screening when specificity is a concern or when you want BLAST-assisted ranking.
