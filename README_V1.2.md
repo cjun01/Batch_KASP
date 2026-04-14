@@ -920,7 +920,24 @@ python KASP_design_V1.2.py \
   --tall_output_csv kasp_out_tall.csv
 ```
 
----
+### Example 9: working case
+
+python /home/cflzxc/software/Batch_KASP/KASP_design_V1.2.py \
+  -g /workspace/cflzxc/brassica/v1/NKTC_pri_v1.chromosomes.only.fasta \
+  -m indels.csv \
+  -o kasp_out.csv \
+  --background_vcf merged.vcf \
+  --allow_shared_allele_primer_variants \
+  --max_shared_allele_variant_positions 2 \
+  --min_shared_allele_variant_distance_3prime 5 \
+  --blast_use_genome \
+  --top_n 5 \
+  --product_min 60 \
+  --product_max 120 \
+  --max_thermo_tm 40 \
+  --preblast_top_n 10 \
+  --blast_num_threads 4 \
+  --include_fallback
 
 ## Recommended workflow
 
