@@ -8,22 +8,17 @@ from pathlib import Path
 from bisect import bisect_right
 from collections import defaultdict
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
-
 from Bio import SeqIO
 import pandas as pd
-
 try:
     from tqdm import tqdm
 except ImportError:  # pragma: no cover
     def tqdm(iterable, **_kwargs):
         return iterable
-
 try:
     import primer3  # type: ignore
 except ImportError:  # pragma: no cover
     primer3 = None
-
-
 FAM = "GAAGGTGACCAAGTTCATGCT"
 VIC = "GAAGGTCGGAGTCAACGGATT"
 VALID_BASES = {"A", "C", "G", "T"}
@@ -32,6 +27,8 @@ CONCISE_OUTPUT_COLUMNS: Sequence[str] = (
     "Chr",
     "Position",
     "Input_position",
+    "ALT_index",
+    "Input_ALT_raw",
     "Ref",
     "Alt",
     "FASTA_base",
@@ -93,6 +90,8 @@ FAILED_OUTPUT_COLUMNS: Sequence[str] = (
     "Chr",
     "Position",
     "Input_position",
+    "ALT_index",
+    "Input_ALT_raw",
     "Ref",
     "Alt",
     "FASTA_base",
@@ -103,53 +102,35 @@ FAILED_OUTPUT_COLUMNS: Sequence[str] = (
     "PASS_candidates_found",
     "FALLBACK_candidates_found",
 )
-
-
 def open_text(path: str):
     if path.endswith(".gz"):
         return gzip.open(path, "rt")
     return open(path, "r")
-
-
 def normalize_chrom_name(name) -> str:
     value = str(name).strip()
     lowered = value.lower()
     if lowered.startswith("chr"):
         return lowered[3:]
     return lowered
-
-
 def reverse_complement(seq: str) -> str:
     return seq.translate(COMPLEMENT)[::-1]
-
-
 def is_clean_sequence(seq: str) -> bool:
     return bool(seq) and set(seq).issubset(VALID_BASES)
-
-
 def is_snp_marker(ref: str, alt: str) -> bool:
     return len(ref) == 1 and len(alt) == 1
-
-
 def is_indel_marker(ref: str, alt: str) -> bool:
     return len(ref) != len(alt)
-
-
 def marker_type(ref: str, alt: str) -> str:
     if is_snp_marker(ref, alt):
         return "snp"
     if is_indel_marker(ref, alt):
         return "indel"
     return "other"
-
-
 def gc_content(seq: str) -> float:
     if not seq:
         return 0.0
     seq = seq.upper()
     return 100.0 * (seq.count("G") + seq.count("C")) / len(seq)
-
-
 def strip_known_sequence_suffix(path_str: str) -> str:
     path = Path(path_str)
     name = path.name
@@ -162,18 +143,12 @@ def strip_known_sequence_suffix(path_str: str) -> str:
             name = name[: -len(suffix)]
             break
     return str(path.with_name(name))
-
-
 def looks_like_fasta_path(path_str: str) -> bool:
     lower = path_str.lower()
     return lower.endswith((".fa", ".fasta", ".fna", ".fas", ".ffn", ".fa.gz", ".fasta.gz", ".fna.gz", ".fas.gz", ".ffn.gz"))
-
-
 def blast_db_exists(prefix: str) -> bool:
     known_suffixes = [".nhr", ".nin", ".nsq", ".ndb", ".not", ".ntf", ".nto", ".nog", ".nos"]
     return any(Path(prefix + suffix).exists() for suffix in known_suffixes)
-
-
 def ensure_blast_db(
     blast_reference: str,
     makeblastdb_path: str = "makeblastdb",
@@ -181,32 +156,26 @@ def ensure_blast_db(
 ) -> Tuple[str, bool]:
     if blast_db_exists(blast_reference):
         return blast_reference, False
-
     reference_path = Path(blast_reference)
     if not reference_path.exists() and not looks_like_fasta_path(blast_reference):
         raise FileNotFoundError(
             f"Could not find BLAST database prefix '{blast_reference}' and it does not look like a FASTA file path."
         )
-
     if shutil.which(makeblastdb_path) is None:
         raise FileNotFoundError(
             f"Could not find makeblastdb executable '{makeblastdb_path}' in PATH."
         )
-
     if not reference_path.exists():
         raise FileNotFoundError(f"FASTA file for BLAST database creation was not found: {blast_reference}")
-
     if blast_db_dir:
         output_dir = Path(blast_db_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         db_prefix = output_dir / Path(strip_known_sequence_suffix(reference_path.name)).name
     else:
         db_prefix = Path(strip_known_sequence_suffix(str(reference_path)))
-
     db_prefix_str = str(db_prefix)
     if blast_db_exists(db_prefix_str):
         return db_prefix_str, False
-
     cmd = [
         makeblastdb_path,
         "-in",
@@ -219,19 +188,15 @@ def ensure_blast_db(
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     return db_prefix_str, True
-
-
 class BackgroundIntervals:
     def __init__(self):
         self._intervals = defaultdict(list)
         self._starts = {}
-
     def add(self, chrom: str, start: int, span: int = 1):
         start = int(start)
         span = max(1, int(span))
         end = start + span - 1
         self._intervals[normalize_chrom_name(chrom)].append((start, end))
-
     def finalize(self):
         for chrom, intervals in self._intervals.items():
             intervals.sort(key=lambda item: (item[0], item[1]))
@@ -243,7 +208,6 @@ class BackgroundIntervals:
                     merged[-1] = (merged[-1][0], max(merged[-1][1], end))
             self._intervals[chrom] = merged
             self._starts[chrom] = [interval[0] for interval in merged]
-
     def has_overlap(
         self,
         chrom: str,
@@ -252,7 +216,6 @@ class BackgroundIntervals:
         ignore_positions: Optional[Set[int]] = None,
     ) -> bool:
         return bool(self.overlapping_positions(chrom, start, end, ignore_positions=ignore_positions))
-
     def overlapping_positions(
         self,
         chrom: str,
@@ -264,12 +227,10 @@ class BackgroundIntervals:
         intervals = self._intervals.get(chrom_key)
         if not intervals:
             return set()
-
         starts = self._starts[chrom_key]
         idx = bisect_right(starts, end)
         if idx == 0:
             return set()
-
         ignored = set(ignore_positions or set())
         positions: Set[int] = set()
         for i in range(idx - 1, -1, -1):
@@ -284,11 +245,7 @@ class BackgroundIntervals:
                 if pos not in ignored:
                     positions.add(pos)
         return positions
-
-
 RANGE_DELETION_EMPTY_ALT_VALUES = {"", "-", ".", "DEL", "DELETION"}
-
-
 def normalize_allele_text(value) -> str:
     if pd.isna(value):
         return ""
@@ -298,8 +255,143 @@ def normalize_allele_text(value) -> str:
     if text in RANGE_DELETION_EMPTY_ALT_VALUES:
         return ""
     return text
-
-
+CHROM_COLUMN_ALIASES = ("chr", "chrom", "#chrom", "chromosome")
+POSITION_COLUMN_ALIASES = ("position", "pos")
+REF_COLUMN_ALIASES = ("ref",)
+ALT_COLUMN_ALIASES = ("alt",)
+def read_marker_dataframe(path: str) -> pd.DataFrame:
+    return pd.read_csv(path, sep=None, engine="python", keep_default_na=False)
+def find_first_matching_column(column_map: Dict[str, str], aliases: Sequence[str]) -> Optional[str]:
+    for alias in aliases:
+        if alias in column_map:
+            return column_map[alias]
+    return None
+def split_alt_field(value) -> List[Tuple[str, int, str]]:
+    raw_text = "" if pd.isna(value) else str(value).strip().upper()
+    if not raw_text:
+        return []
+    pieces = [piece.strip() for piece in raw_text.split(",")]
+    out = []
+    for idx, piece in enumerate(pieces, start=1):
+        normalized = normalize_allele_text(piece)
+        out.append((normalized, idx, raw_text))
+    return out
+def build_normalized_marker_row(
+    chrom: str,
+    position: int,
+    input_position: str,
+    ref: str,
+    alt: str,
+    alt_index: int = 1,
+    input_alt_raw: Optional[str] = None,
+    position_end: Optional[int] = None,
+) -> Optional[dict]:
+    is_range = position_end is not None
+    is_human_deletion = is_range and alt == ""
+    valid = True
+    if not chrom:
+        valid = False
+    elif not ref or not set(ref).issubset(VALID_BASES):
+        valid = False
+    elif alt and not set(alt).issubset(VALID_BASES):
+        valid = False
+    elif ref == alt:
+        valid = False
+    elif is_human_deletion and len(ref) != (position_end - position + 1):
+        valid = False
+    elif is_range and not is_human_deletion:
+        valid = False
+    elif alt == "" and not is_range:
+        valid = False
+    if not valid:
+        return None
+    return {
+        "Chr": chrom,
+        "Position": int(position),
+        "Input_position": input_position,
+        "ALT_index": int(alt_index),
+        "Input_ALT_raw": input_alt_raw if input_alt_raw is not None else alt,
+        "Ref": ref,
+        "Alt": alt,
+    }
+def normalize_marker_columns(df: pd.DataFrame) -> pd.DataFrame:
+    column_map = {column.lower(): column for column in df.columns}
+    chr_col = find_first_matching_column(column_map, CHROM_COLUMN_ALIASES)
+    pos_col = find_first_matching_column(column_map, POSITION_COLUMN_ALIASES)
+    ref_col = find_first_matching_column(column_map, REF_COLUMN_ALIASES)
+    alt_col = find_first_matching_column(column_map, ALT_COLUMN_ALIASES)
+    missing = []
+    if chr_col is None:
+        missing.append("Chr/#CHROM")
+    if pos_col is None:
+        missing.append("position/POS")
+    if ref_col is None:
+        missing.append("ref/REF")
+    if alt_col is None:
+        missing.append("alt/ALT")
+    if missing:
+        raise ValueError(
+            "Marker table must contain chromosome, position, ref, and alt columns. "
+            f"Missing: {', '.join(missing)}"
+        )
+    normalized_rows = []
+    skipped = 0
+    for _, raw_row in df.iterrows():
+        chrom = str(raw_row[chr_col]).strip()
+        try:
+            position, position_end, input_position = parse_position_token(raw_row[pos_col])
+        except ValueError:
+            skipped += 1
+            continue
+        ref = normalize_allele_text(raw_row[ref_col])
+        alt_entries = split_alt_field(raw_row[alt_col])
+        if not alt_entries:
+            alt_entries = [("", 1, "")]
+        appended_any = False
+        for alt, alt_index, input_alt_raw in alt_entries:
+            row = build_normalized_marker_row(
+                chrom=chrom,
+                position=position,
+                input_position=input_position,
+                ref=ref,
+                alt=alt,
+                alt_index=alt_index,
+                input_alt_raw=input_alt_raw,
+                position_end=position_end,
+            )
+            if row is None:
+                skipped += 1
+                continue
+            normalized_rows.append(row)
+            appended_any = True
+        if not appended_any and not alt_entries:
+            skipped += 1
+    if skipped:
+        print(
+            "Skipping "
+            f"{skipped} invalid markers from the marker input. Supported formats are: "
+            "numeric SNP/anchored indel rows, deletion rows like 13969-13971,GAT,-, "
+            "or VCF-style anchored indel rows inside a CSV/TSV marker table. "
+            "Comma-separated ALT values in the alt column are split into separate assays."
+        )
+    normalized = pd.DataFrame(
+        normalized_rows,
+        columns=["Chr", "Position", "Input_position", "ALT_index", "Input_ALT_raw", "Ref", "Alt"],
+    )
+    if normalized.empty:
+        return normalized
+    normalized = normalized.drop_duplicates().sort_values(["Chr", "Position", "Ref", "Alt", "ALT_index"])
+    return normalized.reset_index(drop=True)
+def load_marker_table(path: str) -> pd.DataFrame:
+    lower = str(path).lower()
+    if lower.endswith((".vcf", ".vcf.gz")):
+        raise ValueError(
+            "--marker_csv expects a CSV/TSV marker table, not a raw VCF. "
+            "Please provide a delimited file with columns Chr, position, ref, and alt. "
+            "VCF-style alleles such as TAA -> TCTTAAA are supported inside that table. "
+            "Use --background_vcf for the full VCF when masking nearby variants."
+        )
+    return normalize_marker_columns(read_marker_dataframe(path))
 def parse_position_token(value) -> Tuple[int, Optional[int], str]:
     text = str(value).strip()
     if not text:
@@ -317,93 +409,13 @@ def parse_position_token(value) -> Tuple[int, Optional[int], str]:
         raise ValueError(f"Invalid position value: {text}")
     start = int(text)
     return start, None, text
-
-
-def normalize_marker_columns(df: pd.DataFrame) -> pd.DataFrame:
-    column_map = {column.lower(): column for column in df.columns}
-    required = {"chr", "position", "ref", "alt"}
-    missing = required - set(column_map)
-    if missing:
-        raise ValueError(
-            "Marker CSV must contain the columns Chr, position, ref, and alt. "
-            f"Missing: {', '.join(sorted(missing))}"
-        )
-
-    normalized_rows = []
-    skipped = 0
-
-    for _, raw_row in df.iterrows():
-        chrom = str(raw_row[column_map["chr"]]).strip()
-        try:
-            position, position_end, input_position = parse_position_token(raw_row[column_map["position"]])
-        except ValueError:
-            skipped += 1
-            continue
-
-        ref = normalize_allele_text(raw_row[column_map["ref"]])
-        alt = normalize_allele_text(raw_row[column_map["alt"]])
-        is_range = position_end is not None
-        is_human_deletion = is_range and alt == ""
-
-        valid = True
-        if not chrom:
-            valid = False
-        elif not ref or not set(ref).issubset(VALID_BASES):
-            valid = False
-        elif alt and not set(alt).issubset(VALID_BASES):
-            valid = False
-        elif ref == alt:
-            valid = False
-        elif is_human_deletion and len(ref) != (position_end - position + 1):
-            valid = False
-        elif is_range and not is_human_deletion:
-            valid = False
-        elif alt == "" and not is_range:
-            valid = False
-
-        if not valid:
-            skipped += 1
-            continue
-
-        normalized_rows.append(
-            {
-                "Chr": chrom,
-                "Position": int(position),
-                "Input_position": input_position,
-                "Ref": ref,
-                "Alt": alt,
-            }
-        )
-
-    if skipped:
-        print(
-            "Skipping "
-            f"{skipped} invalid markers from the marker CSV. Supported formats are: "
-            "numeric SNP/anchored indel rows, or deletion rows like 13969-13971,GAT,-"
-        )
-
-    normalized = pd.DataFrame(normalized_rows, columns=["Chr", "Position", "Input_position", "Ref", "Alt"])
-    if normalized.empty:
-        return normalized
-
-    normalized = normalized.drop_duplicates().sort_values(["Chr", "Position", "Input_position", "Ref", "Alt"])
-    return normalized.reset_index(drop=True)
-
-
-def load_marker_table(path: str) -> pd.DataFrame:
-    return normalize_marker_columns(pd.read_csv(path, keep_default_na=False))
-
-
 def parse_background_position_and_span(position_value, ref_value=None) -> Tuple[int, int]:
     start, end, _ = parse_position_token(position_value)
     if end is not None:
         return start, end - start + 1
-
     ref = normalize_allele_text(ref_value)
     span = len(ref) if ref else 1
     return start, span
-
-
 def load_background_from_csv(path: str, background: BackgroundIntervals):
     df = pd.read_csv(path, keep_default_na=False)
     column_map = {column.lower(): column for column in df.columns}
@@ -414,17 +426,14 @@ def load_background_from_csv(path: str, background: BackgroundIntervals):
             "Background CSV must contain at least the columns Chr and position. "
             f"Missing: {', '.join(sorted(missing))}"
         )
-
     ref_column = column_map.get("ref")
     chromosomes = df[column_map["chr"]].astype(str)
-
     for index, chrom in chromosomes.items():
         start, span = parse_background_position_and_span(
             df.at[index, column_map["position"]],
             df.at[index, ref_column] if ref_column is not None else None,
         )
         background.add(chrom, start, span)
-
 def load_background_from_vcf(path: str, background: BackgroundIntervals):
     with open_text(path) as handle:
         for raw_line in handle:
@@ -438,27 +447,20 @@ def load_background_from_vcf(path: str, background: BackgroundIntervals):
             ref = fields[3].upper()
             span = len(ref) if ref else 1
             background.add(chrom, start, span)
-
-
 def build_background_intervals(
     targets: pd.DataFrame,
     background_csv: Optional[str] = None,
     background_vcf: Optional[str] = None,
 ) -> BackgroundIntervals:
     background = BackgroundIntervals()
-
     for row in targets.itertuples(index=False):
         background.add(row.Chr, int(row.Position), len(row.Ref))
-
     if background_csv:
         load_background_from_csv(background_csv, background)
     if background_vcf:
         load_background_from_vcf(background_vcf, background)
-
     background.finalize()
     return background
-
-
 class Primer3Thermo:
     def __init__(
         self,
@@ -479,7 +481,6 @@ class Primer3Thermo:
         self.dna_conc = dna_conc
         self.temp_c = temp_c
         self.max_loop = max_loop
-
     def tm(self, seq: str) -> float:
         return float(
             primer3.calc_tm(
@@ -490,7 +491,6 @@ class Primer3Thermo:
                 dna_conc=self.dna_conc,
             )
         )
-
     def hairpin(self, seq: str):
         return primer3.calc_hairpin(
             seq,
@@ -501,7 +501,6 @@ class Primer3Thermo:
             temp_c=self.temp_c,
             max_loop=self.max_loop,
         )
-
     def homodimer(self, seq: str):
         return primer3.calc_homodimer(
             seq,
@@ -512,7 +511,6 @@ class Primer3Thermo:
             temp_c=self.temp_c,
             max_loop=self.max_loop,
         )
-
     def heterodimer(self, seq1: str, seq2: str):
         return primer3.calc_heterodimer(
             seq1,
@@ -524,8 +522,6 @@ class Primer3Thermo:
             temp_c=self.temp_c,
             max_loop=self.max_loop,
         )
-
-
 class BlastPrimerChecker:
     def __init__(
         self,
@@ -546,7 +542,6 @@ class BlastPrimerChecker:
         self.word_size = word_size
         self.max_target_seqs = max_target_seqs
         self.num_threads = num_threads
-
     @staticmethod
     def _is_on_target(hit: dict, expected_chrom: str, expected_start: int, expected_end: int) -> bool:
         if normalize_chrom_name(hit["sseqid"]) != normalize_chrom_name(expected_chrom):
@@ -555,18 +550,15 @@ class BlastPrimerChecker:
         hit_end = max(hit["sstart"], hit["send"])
         overlap = max(0, min(hit_end, expected_end) - max(hit_start, expected_start) + 1)
         return overlap >= max(8, hit["effective_len"] - 2)
-
     def screen_primers(self, primer_queries: List[dict]) -> Dict[str, dict]:
         if not primer_queries:
             return {}
-
         with tempfile.TemporaryDirectory(prefix="kasp_blast_") as tmpdir:
             query_fa = f"{tmpdir}/queries.fa"
             out_tsv = f"{tmpdir}/hits.tsv"
             with open(query_fa, "w") as handle:
                 for query in primer_queries:
                     handle.write(f">{query['qid']}\n{query['seq']}\n")
-
             cmd = [
                 self.blastn_path,
                 "-task", self.task,
@@ -581,7 +573,6 @@ class BlastPrimerChecker:
                 "-out", out_tsv,
             ]
             subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-
             by_qid = defaultdict(list)
             with open(out_tsv, "r") as handle:
                 for line in handle:
@@ -614,7 +605,6 @@ class BlastPrimerChecker:
                         "exact_full_length": qstart == 1 and qend == qlen and int(fields[4]) == 0 and int(fields[5]) == 0,
                     }
                     by_qid[qid].append(hit)
-
         summaries = {}
         for query in primer_queries:
             qid = query["qid"]
@@ -626,7 +616,6 @@ class BlastPrimerChecker:
                     on_target.append(hit)
                 else:
                     off_target.append(hit)
-
             off_target_3prime = [
                 hit for hit in off_target
                 if hit["covers_3prime_end"] and hit["near_full_length"]
@@ -647,8 +636,6 @@ class BlastPrimerChecker:
                 "best_offtarget_3prime_identity": best_offtarget_identity,
             }
         return summaries
-
-
 class KASPDesigner:
     def __init__(
         self,
@@ -694,7 +681,6 @@ class KASPDesigner:
         self.ideal_product_size = (self.product_min + self.product_max) / 2.0
         self.ideal_tm = (self.tm_min + self.tm_max) / 2.0
         self.ideal_gc = 50.0
-
     def classify_marker(self, sequence: str, pos0: int, ref: str, alt: str):
         ref_slice = sequence[pos0: pos0 + len(ref)]
         alt_slice = sequence[pos0: pos0 + len(alt)]
@@ -703,18 +689,14 @@ class KASPDesigner:
         if len(ref) == len(alt) and alt_slice == alt:
             return True, alt_slice, "ALT matches FASTA; FASTA carries ALT allele", "Yes"
         return False, ref_slice, "REF does not match FASTA at marker span", "Unknown"
-
     def candidate_exclusion_reason(self, product_size: int, worst_struct_tm: float) -> str:
         reasons = []
-
         if product_size < self.product_min:
             reasons.append("product_size_below_min")
         elif product_size > self.product_max:
             reasons.append("product_size_above_max")
-
         if worst_struct_tm > self.max_thermo_tm:
             reasons.append("worst_struct_tm_above_max")
-
         return ";".join(reasons)
     def common_reverse_candidates(
         self,
@@ -760,7 +742,6 @@ class KASPDesigner:
                 }
                 if yielded >= self.max_candidates_per_orientation:
                     return
-
     def common_forward_candidates(
         self,
         chrom: str,
@@ -804,7 +785,6 @@ class KASPDesigner:
                 }
                 if yielded >= self.max_candidates_per_orientation:
                     return
-
     def evaluate_pair(
         self,
         a1_full: str,
@@ -818,15 +798,12 @@ class KASPDesigner:
         a1_hairpin = self.thermo.hairpin(a1_full)
         a2_hairpin = self.thermo.hairpin(a2_full)
         common_hairpin = self.thermo.hairpin(common_full)
-
         a1_homodimer = self.thermo.homodimer(a1_full)
         a2_homodimer = self.thermo.homodimer(a2_full)
         common_homodimer = self.thermo.homodimer(common_full)
-
         a1_common_heterodimer = self.thermo.heterodimer(a1_full, common_full)
         a2_common_heterodimer = self.thermo.heterodimer(a2_full, common_full)
         a1_a2_heterodimer = self.thermo.heterodimer(a1_full, a2_full)
-
         structural_tms = [
             float(a1_hairpin.tm),
             float(a2_hairpin.tm),
@@ -844,10 +821,8 @@ class KASPDesigner:
             abs(common_core_tm - a2_core_tm),
             abs(a1_core_tm - a2_core_tm),
         )
-
         exclusion_reason = self.candidate_exclusion_reason(product_size, worst_struct_tm)
         passed = exclusion_reason == ""
-
         return {
             "passed": passed,
             "Exclusion_reason": exclusion_reason,
@@ -882,7 +857,6 @@ class KASPDesigner:
             gc_penalty,
             tm_center_penalty,
         )
-
     def local_score_value(self, result: dict) -> float:
         gc_penalty = (
             abs(result["A1_core_gc"] - self.ideal_gc)
@@ -905,12 +879,10 @@ class KASPDesigner:
             + gc_penalty * 0.25
             + tm_center_penalty * 0.5
         )
-
     def _finalize_candidate(self, result: dict):
         result["Local_score"] = round(self.local_score_value(result), 4)
         result["Local_score_tuple"] = "|".join(f"{x:.4f}" for x in self.local_score_tuple(result))
         return result
-
     def _sort_allele_candidates(self, candidates: List[dict], limit: int = 12) -> List[dict]:
         ordered = sorted(
             candidates,
@@ -921,18 +893,15 @@ class KASPDesigner:
             ),
         )
         return ordered[:limit]
-
     @staticmethod
     def _shared_variant_used(result: dict) -> bool:
         value = str(result.get("Shared_variant_tolerance_used", "No")).strip().lower()
         return value in {"yes", "true", "1"}
-
     @staticmethod
     def _three_prime_distance(direction: str, span_start: int, span_end: int, position: int) -> int:
         if direction == "reverse":
             return int(position) - int(span_start)
         return int(span_end) - int(position)
-
     def _single_candidate_overlap_allowed(
         self,
         direction: str,
@@ -951,7 +920,6 @@ class KASPDesigner:
         if min_distance < self.min_shared_allele_variant_distance_3prime:
             return False, "shared_allele_variant_too_close_to_3prime", min_distance
         return True, None, min_distance
-
     def _evaluate_shared_allele_variant_allowance(
         self,
         chrom: str,
@@ -965,7 +933,6 @@ class KASPDesigner:
     ) -> dict:
         a1_positions = sorted(self.background.overlapping_positions(chrom, a1_span_start, a1_span_end, ignore_positions=ignore_positions))
         a2_positions = sorted(self.background.overlapping_positions(chrom, a2_span_start, a2_span_end, ignore_positions=ignore_positions))
-
         if not a1_positions and not a2_positions:
             return {
                 "ok": True,
@@ -976,16 +943,12 @@ class KASPDesigner:
                 "a1_min_distance": "",
                 "a2_min_distance": "",
             }
-
         if not self.allow_shared_allele_primer_variants:
             return {"ok": False, "failure_reason": "allele_specific_overlaps_variant"}
-
         if not a1_positions or not a2_positions or a1_positions != a2_positions:
             return {"ok": False, "failure_reason": "shared_allele_variant_not_shared_between_a1_a2"}
-
         if len(a1_positions) > self.max_shared_allele_variant_positions:
             return {"ok": False, "failure_reason": "shared_allele_variant_overlap_exceeds_limit"}
-
         a1_min_distance = min(
             self._three_prime_distance(a1_direction, a1_span_start, a1_span_end, pos)
             for pos in a1_positions
@@ -999,7 +962,6 @@ class KASPDesigner:
             or a2_min_distance < self.min_shared_allele_variant_distance_3prime
         ):
             return {"ok": False, "failure_reason": "shared_allele_variant_too_close_to_3prime"}
-
         positions_text = ";".join(str(pos) for pos in a1_positions)
         warning = (
             "Allowed shared non-target variant overlap in the common region of A1/A2 at position(s): "
@@ -1015,7 +977,6 @@ class KASPDesigner:
             "a1_min_distance": a1_min_distance,
             "a2_min_distance": a2_min_distance,
         }
-
     def _hap_local_to_reference_span(
         self,
         start_local: int,
@@ -1029,12 +990,10 @@ class KASPDesigner:
     ) -> Tuple[int, int]:
         allele_start_local = left_flank_len
         allele_end_local = left_flank_len + allele_len
-
         if start_local < allele_start_local:
             start_1b = left_flank_start_1b + start_local
         else:
             start_1b = ref_start_1b
-
         if end_local <= allele_start_local:
             end_1b = left_flank_start_1b + end_local - 1
         elif end_local <= allele_end_local:
@@ -1043,9 +1002,7 @@ class KASPDesigner:
         else:
             suffix_after_junction = end_local - allele_end_local
             end_1b = right_flank_start_1b + suffix_after_junction - 1
-
         return start_1b, end_1b
-
     def _indel_forward_allele_candidates(
         self,
         chrom: str,
@@ -1113,7 +1070,6 @@ class KASPDesigner:
                     }
                 )
         return self._sort_allele_candidates(candidates)
-
     def _indel_reverse_allele_candidates(
         self,
         chrom: str,
@@ -1182,7 +1138,6 @@ class KASPDesigner:
                     }
                 )
         return self._sort_allele_candidates(candidates)
-
     def _build_result_record(
         self,
         base_info: dict,
@@ -1246,18 +1201,15 @@ class KASPDesigner:
             "Product_size": product_size,
             **pair_eval,
         }
-
     def _design_snp_marker_candidates(self, sequence: str, chrom: str, pos1: int, pos0: int, ref: str, alt: str, base_info: dict):
         pass_candidates = []
         fallback_candidates = []
         failure_reasons = defaultdict(int)
         seen_keys = set()
         ignore_positions = {pos1}
-
         right_flank = sequence[pos0 + 1: pos0 + 1 + self.scan_window]
         left_flank_start0 = max(0, pos0 - self.scan_window)
         left_flank = sequence[left_flank_start0:pos0]
-
         for allele_len in range(self.allele_primer_min, self.allele_primer_max + 1):
             start0 = pos0 - (allele_len - 1)
             if start0 < 0:
@@ -1295,7 +1247,6 @@ class KASPDesigner:
                     "forward_" + shared_variant_assessment.get("failure_reason", "allele_specific_overlaps_variant")
                 ] += 1
                 continue
-
             a1_full = FAM + ref_core
             a2_full = VIC + alt_core
             target_tm = (ref_tm + alt_tm) / 2.0
@@ -1341,7 +1292,6 @@ class KASPDesigner:
                     pass_candidates.append(result)
                 else:
                     fallback_candidates.append(result)
-
         for allele_len in range(self.allele_primer_min, self.allele_primer_max + 1):
             end0 = pos0 + allele_len
             if end0 > len(sequence):
@@ -1381,7 +1331,6 @@ class KASPDesigner:
                     "reverse_" + shared_variant_assessment.get("failure_reason", "allele_specific_overlaps_variant")
                 ] += 1
                 continue
-
             a1_full = FAM + ref_core
             a2_full = VIC + alt_core
             target_tm = (ref_tm + alt_tm) / 2.0
@@ -1427,7 +1376,6 @@ class KASPDesigner:
                     pass_candidates.append(result)
                 else:
                     fallback_candidates.append(result)
-
         pass_candidates.sort(key=self.local_score_tuple)
         fallback_candidates.sort(key=self.local_score_tuple)
         if pass_candidates:
@@ -1438,7 +1386,6 @@ class KASPDesigner:
             status = max(failure_reasons.items(), key=lambda item: item[1])[0]
         else:
             status = "no_candidate_found"
-
         return {
             "status": status,
             "pass_candidates": pass_candidates,
@@ -1446,14 +1393,12 @@ class KASPDesigner:
             "info": base_info,
             "failure_reasons": dict(failure_reasons),
         }
-
     def _design_indel_marker_candidates(self, sequence: str, chrom: str, pos1: int, pos0: int, ref: str, alt: str, base_info: dict):
         pass_candidates = []
         fallback_candidates = []
         failure_reasons = defaultdict(int)
         seen_keys = set()
         ignore_positions = set(range(pos1, pos1 + len(ref)))
-
         ref_block = sequence[pos0: pos0 + len(ref)]
         if ref_block != ref:
             return {
@@ -1463,7 +1408,6 @@ class KASPDesigner:
                 "info": base_info,
                 "failure_reasons": {},
             }
-
         left_flank_start0 = max(0, pos0 - self.scan_window)
         left_flank = sequence[left_flank_start0:pos0]
         right_flank = sequence[pos0 + len(ref): pos0 + len(ref) + self.scan_window]
@@ -1471,10 +1415,8 @@ class KASPDesigner:
         ref_start_1b = pos1
         right_flank_start_1b = pos1 + len(ref)
         delta = len(alt) - len(ref)
-
         ref_haplotype = left_flank + ref + right_flank
         alt_haplotype = left_flank + alt + right_flank
-
         ref_forward = self._indel_forward_allele_candidates(
             chrom, ref_haplotype, len(ref), len(left_flank), left_flank_start_1b, ref_start_1b, len(ref), right_flank_start_1b, ignore_positions
         )
@@ -1487,12 +1429,10 @@ class KASPDesigner:
         alt_reverse = self._indel_reverse_allele_candidates(
             chrom, alt_haplotype, len(alt), len(left_flank), left_flank_start_1b, ref_start_1b, len(ref), right_flank_start_1b, ignore_positions
         )
-
         if not ref_forward or not alt_forward:
             failure_reasons["indel_forward_allele_specific_candidates"] += 1
         if not ref_reverse or not alt_reverse:
             failure_reasons["indel_reverse_allele_specific_candidates"] += 1
-
         for a1 in ref_forward:
             for a2 in alt_forward:
                 if abs(a1["tm"] - a2["tm"]) > self.tm_tolerance:
@@ -1561,7 +1501,6 @@ class KASPDesigner:
                         pass_candidates.append(result)
                     else:
                         fallback_candidates.append(result)
-
         for a1 in ref_reverse:
             for a2 in alt_reverse:
                 if abs(a1["tm"] - a2["tm"]) > self.tm_tolerance:
@@ -1630,7 +1569,6 @@ class KASPDesigner:
                         pass_candidates.append(result)
                     else:
                         fallback_candidates.append(result)
-
         pass_candidates.sort(key=self.local_score_tuple)
         fallback_candidates.sort(key=self.local_score_tuple)
         if pass_candidates:
@@ -1641,7 +1579,6 @@ class KASPDesigner:
             status = max(failure_reasons.items(), key=lambda item: item[1])[0]
         else:
             status = "no_candidate_found"
-
         return {
             "status": status,
             "pass_candidates": pass_candidates,
@@ -1649,17 +1586,14 @@ class KASPDesigner:
             "info": base_info,
             "failure_reasons": dict(failure_reasons),
         }
-
     def design_marker_candidates(self, sequences: Dict[str, str], chrom: str, position: int, ref: str, alt: str, input_position: Optional[str] = None):
         sequence = sequences.get(normalize_chrom_name(chrom))
         if sequence is None:
             return {"status": "missing_chromosome_in_fasta", "pass_candidates": [], "fallback_candidates": [], "info": None}
-
         pos1 = int(position)
         pos0 = pos1 - 1
         if pos0 < 0 or pos0 >= len(sequence):
             return {"status": "position_out_of_range", "pass_candidates": [], "fallback_candidates": [], "info": None}
-
         ref = ref.upper()
         alt = alt.upper()
         alignment_ok, fasta_base, allele_note, tassel_major_as_ref = self.classify_marker(sequence, pos0, ref, alt)
@@ -1667,6 +1601,8 @@ class KASPDesigner:
             "Chr": chrom,
             "Position": pos1,
             "Input_position": input_position or str(pos1),
+            "ALT_index": 1,
+            "Input_ALT_raw": alt,
             "Ref": ref,
             "Alt": alt,
             "FASTA_base": fasta_base,
@@ -1680,13 +1616,11 @@ class KASPDesigner:
                 "fallback_candidates": [],
                 "info": base_info,
             }
-
         kind = marker_type(ref, alt)
         if kind == "snp":
             return self._design_snp_marker_candidates(sequence, chrom, pos1, pos0, ref, alt, base_info)
         if kind == "indel":
             return self._design_indel_marker_candidates(sequence, chrom, pos1, pos0, ref, alt, base_info)
-
         return {
             "status": "equal_length_multibase_not_supported",
             "pass_candidates": [],
@@ -1694,16 +1628,12 @@ class KASPDesigner:
             "info": base_info,
             "failure_reasons": {},
         }
-
-
 def load_sequences(genome_path: str) -> Dict[str, str]:
     sequences = {}
     with open_text(genome_path) as fasta_handle:
         for record in SeqIO.parse(fasta_handle, "fasta"):
             sequences[normalize_chrom_name(record.id)] = str(record.seq).upper()
     return sequences
-
-
 def build_blast_queries(candidates: List[dict]) -> List[dict]:
     queries = []
     for idx, candidate in enumerate(candidates):
@@ -1743,14 +1673,11 @@ def build_blast_queries(candidates: List[dict]) -> List[dict]:
             }
         )
     return queries
-
-
 def annotate_offtarget_metrics(candidates: List[dict], checker: BlastPrimerChecker):
     if not candidates:
         return
     queries = build_blast_queries(candidates)
     summaries = checker.screen_primers(queries)
-
     for idx, candidate in enumerate(candidates):
         a1 = summaries.get(f"cand{idx}|A1", {})
         a2 = summaries.get(f"cand{idx}|A2", {})
@@ -1779,8 +1706,6 @@ def annotate_offtarget_metrics(candidates: List[dict], checker: BlastPrimerCheck
             candidate["A2_best_offtarget_3prime_bitscore"],
             candidate["Common_best_offtarget_3prime_bitscore"],
         )
-
-
 def combined_sort_key(candidate: dict):
     return (
         int(candidate.get("Total_exact_full_length_off_target_hits", 0)),
@@ -1790,8 +1715,6 @@ def combined_sort_key(candidate: dict):
         float(candidate["worst_struct_tm"]),
         float(candidate["max_tm_delta"]),
     )
-
-
 def common_primer_sites_too_close(candidate_a: dict, candidate_b: dict, min_gap: int) -> bool:
     gap = max(0, int(min_gap))
     start_a = int(candidate_a["Common_primer_span_start"])
@@ -1799,12 +1722,9 @@ def common_primer_sites_too_close(candidate_a: dict, candidate_b: dict, min_gap:
     start_b = int(candidate_b["Common_primer_span_start"])
     end_b = int(candidate_b["Common_primer_span_end"])
     return not (end_a + gap < start_b or end_b + gap < start_a)
-
-
 def diversify_ranked_candidates(candidates: List[dict], top_n: int, min_common_primer_gap: int) -> List[dict]:
     if top_n <= 0:
         return []
-
     selected = []
     for candidate in candidates:
         if any(common_primer_sites_too_close(candidate, kept, min_common_primer_gap) for kept in selected):
@@ -1813,39 +1733,28 @@ def diversify_ranked_candidates(candidates: List[dict], top_n: int, min_common_p
         if len(selected) >= top_n:
             break
     return selected
-
-
 def build_output_dataframe(results: List[dict], output_mode: str, blast_enabled: bool) -> pd.DataFrame:
     output_df = pd.DataFrame(results)
     if output_mode == "full":
         return output_df
-
     selected_columns = list(CONCISE_OUTPUT_COLUMNS)
     if blast_enabled:
         selected_columns.extend(CONCISE_BLAST_OUTPUT_COLUMNS)
-
     if output_df.empty:
         return pd.DataFrame(columns=selected_columns)
-
     return output_df.loc[:, [column for column in selected_columns if column in output_df.columns]]
-
-
 def format_tall_rank(value) -> str:
     if pd.isna(value):
         return "NA"
     if isinstance(value, float) and value.is_integer():
         value = int(value)
     return str(value)
-
-
 def build_tall_output_dataframe(output_df: pd.DataFrame) -> pd.DataFrame:
     if output_df.empty:
         return pd.DataFrame(columns=TALL_OUTPUT_COLUMNS)
-
     primer_columns = [column for column in TALL_PRIMER_COLUMNS if column in output_df.columns]
     if not primer_columns:
         return pd.DataFrame(columns=TALL_OUTPUT_COLUMNS)
-
     tall_rows = []
     for record in output_df.to_dict("records"):
         chrom = str(record.get("Chr", "NA"))
@@ -1864,10 +1773,7 @@ def build_tall_output_dataframe(output_df: pd.DataFrame) -> pd.DataFrame:
                     "Primer_Sequence": sequence,
                 }
             )
-
     return pd.DataFrame(tall_rows, columns=TALL_OUTPUT_COLUMNS)
-
-
 def format_failure_reason_counts(failure_reasons: Dict[str, int]) -> str:
     if not failure_reasons:
         return ""
@@ -1875,26 +1781,18 @@ def format_failure_reason_counts(failure_reasons: Dict[str, int]) -> str:
         f"{reason}={count}"
         for reason, count in sorted(failure_reasons.items(), key=lambda item: (-item[1], item[0]))
     )
-
-
 def build_failed_output_path(output_csv: str, failed_output_csv: Optional[str] = None) -> str:
     if failed_output_csv:
         return failed_output_csv
-
     output_path = Path(output_csv)
     if output_path.suffix:
         return str(output_path.with_name(f"{output_path.stem}_failed{output_path.suffix}"))
     return f"{output_csv}_failed.csv"
-
-
 def build_failed_output_dataframe(failed_results: List[dict]) -> pd.DataFrame:
     if not failed_results:
         return pd.DataFrame(columns=FAILED_OUTPUT_COLUMNS)
-
     failed_df = pd.DataFrame(failed_results)
     return failed_df.loc[:, [column for column in FAILED_OUTPUT_COLUMNS if column in failed_df.columns]]
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -1908,8 +1806,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--marker_csv",
         required=True,
         help=(
-            "Path to the marker CSV containing Chr, position, ref, and alt. "
-            "Supports numeric SNP/anchored indel rows and deletion rows like 13969-13971,GAT,-."
+            "Path to the marker CSV/TSV containing Chr, position, ref, and alt. "
+            "Supports numeric SNP rows, VCF-style anchored indel rows such as 30423823,TAA,TCTTAAA, "
+            "and deletion rows like 13969-13971,GAT,-. Comma-separated ALT values in the alt column are split into separate assays."
         ),
     )
     parser.add_argument("-o", "--output_csv", required=True, help="Path to save the output CSV.")
@@ -2042,12 +1941,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--temp_c", type=float, default=37.0, help="Temperature used for Primer3 structure calculations.")
     parser.add_argument("--max_loop", type=int, default=30, help="Maximum loop size for Primer3 structure calculations.")
     return parser
-
-
 def main():
     parser = build_parser()
     args = parser.parse_args()
-
     sequences = load_sequences(args.genome_path)
     marker_info = load_marker_table(args.marker_csv)
     background = build_background_intervals(
@@ -2055,7 +1951,6 @@ def main():
         background_csv=args.background_csv,
         background_vcf=args.background_vcf,
     )
-
     thermo = Primer3Thermo(
         mv_conc=args.mv_conc,
         dv_conc=args.dv_conc,
@@ -2085,7 +1980,6 @@ def main():
         max_shared_allele_variant_positions=args.max_shared_allele_variant_positions,
         min_shared_allele_variant_distance_3prime=args.min_shared_allele_variant_distance_3prime,
     )
-
     blast_checker = None
     resolved_blast_db = None
     built_blast_db = False
@@ -2094,7 +1988,6 @@ def main():
         blast_reference = args.genome_path
     elif args.blast_db:
         blast_reference = args.blast_db
-
     if blast_reference:
         resolved_blast_db, built_blast_db = ensure_blast_db(
             blast_reference,
@@ -2109,13 +2002,11 @@ def main():
             max_target_seqs=args.blast_max_target_seqs,
             num_threads=args.blast_num_threads,
         )
-
     results = []
     failed_results = []
     outcome_counts = defaultdict(int)
     ref_mismatch_count = 0
     alt_matches_fasta_count = 0
-
     for row in tqdm(marker_info.itertuples(index=False), total=marker_info.shape[0], desc="Processing markers"):
         marker_result = designer.design_marker_candidates(
             sequences,
@@ -2125,12 +2016,16 @@ def main():
             row.Alt,
             getattr(row, "Input_position", str(row.Position)),
         )
+        if marker_result.get("info") is not None:
+            marker_result["info"]["ALT_index"] = getattr(row, "ALT_index", 1)
+            marker_result["info"]["Input_ALT_raw"] = getattr(row, "Input_ALT_raw", row.Alt)
         outcome_counts[marker_result["status"]] += 1
-
         info = marker_result.get("info") or {
             "Chr": row.Chr,
             "Position": int(row.Position),
             "Input_position": getattr(row, "Input_position", str(row.Position)),
+            "ALT_index": getattr(row, "ALT_index", 1),
+            "Input_ALT_raw": getattr(row, "Input_ALT_raw", row.Alt),
             "Ref": row.Ref,
             "Alt": row.Alt,
             "FASTA_base": "NA",
@@ -2141,7 +2036,6 @@ def main():
             ref_mismatch_count += 1
         if info.get("TASSEL_major_allele_as_REF") == "Yes":
             alt_matches_fasta_count += 1
-
         selected = []
         if marker_result["pass_candidates"]:
             local_top = (
@@ -2201,7 +2095,6 @@ def main():
                 )
             for candidate in selected:
                 candidate["Design_status"] = "FALLBACK"
-
         if selected:
             selected.sort(key=combined_sort_key if blast_checker else lambda x: x["Local_score"])
             for rank, candidate in enumerate(selected, start=1):
@@ -2221,6 +2114,8 @@ def main():
                     "Chr": info.get("Chr", row.Chr),
                     "Position": int(info.get("Position", row.Position)),
                     "Input_position": info.get("Input_position", getattr(row, "Input_position", str(row.Position))),
+                    "ALT_index": info.get("ALT_index", getattr(row, "ALT_index", 1)),
+                    "Input_ALT_raw": info.get("Input_ALT_raw", getattr(row, "Input_ALT_raw", row.Alt)),
                     "Ref": info.get("Ref", row.Ref),
                     "Alt": info.get("Alt", row.Alt),
                     "FASTA_base": info.get("FASTA_base", "NA"),
@@ -2232,26 +2127,22 @@ def main():
                     "FALLBACK_candidates_found": len(marker_result["fallback_candidates"]),
                 }
             )
-
     output_df = build_output_dataframe(
         results,
         output_mode=args.output_mode,
         blast_enabled=blast_checker is not None,
     )
     output_df.to_csv(args.output_csv, index=False)
-
     tall_output_path = None
     if args.tall_output_csv:
         tall_output_path = args.tall_output_csv
         tall_output_df = build_tall_output_dataframe(output_df)
         tall_output_df.to_csv(tall_output_path, index=False)
-
     failed_output_path = None
     if failed_results or args.failed_output_csv:
         failed_output_path = build_failed_output_path(args.output_csv, args.failed_output_csv)
         failed_output_df = build_failed_output_dataframe(failed_results)
         failed_output_df.to_csv(failed_output_path, index=False)
-
     print(f"Output rows written: {len(results)}")
     print(f"Output mode: {args.output_mode}")
     print(f"Markers without written output rows: {len(failed_results)}")
@@ -2269,7 +2160,5 @@ def main():
         print(f"Tall-format output saved to {tall_output_path}")
     if failed_output_path:
         print(f"Failed-marker report saved to {failed_output_path}")
-
-
 if __name__ == "__main__":
     main()
